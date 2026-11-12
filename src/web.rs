@@ -223,7 +223,11 @@ async fn settings(
     let room = live_room(&app, &client_ip(&h, a), &code)?;
     app.db.set_room_flags(&room.code, req.autoplay, req.mood.as_ref(), req.close)?;
     let room = live_room(&app, &client_ip(&h, a), &code)?;
-    // Turning Autoplay on in a quiet room starts the radio now.
+    // An Autoplay pick that has not started yet is redone with the new settings. Then, if the
+    // room is quiet (Autoplay just turned on, or that pick was dropped), the radio picks now.
+    if room.autoplay {
+        app.db.drop_pending_autoplay(&room.code)?;
+    }
     crate::radio::fill(&app.db, &app.cfg, &room)?;
     state_json(&app, &room)
 }
@@ -507,6 +511,11 @@ mod tests {
         assert_eq!(room["close"], "tight");
         assert_eq!(room["tempo"]["total"], 3, "the page is told how much of the library has a measured tempo");
         assert_eq!(now(&b)["queue"].as_array().unwrap().len(), 1);
+        let waiting = now(&b)["queue"][0]["id"].clone();
+        // Changing a setting before that song starts picks again, so the new setting counts at once.
+        let (_, b) = call(&r, "POST", "/api/r/room1/settings", false, Some(json!({"mood": {"artist": true}}))).await;
+        assert_eq!(now(&b)["queue"].as_array().unwrap().len(), 1, "one waiting pick, not two");
+        assert_ne!(now(&b)["queue"][0]["id"], waiting, "the waiting pick was replaced");
         let (_, b) = call(&r, "POST", "/api/r/room1/advance", false, None).await;
         let first = now(&b)["now"].clone();
         assert_eq!((first["status"].as_str(), first["added_by"].as_str()), (Some("playing"), Some("Autoplay")));

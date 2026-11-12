@@ -55,13 +55,16 @@ within three songs. With nothing else switched on, the pick is random.
 **Keep the mood** (shown while Autoplay is on) makes the pick follow what the last five songs were
 like. Choose what to follow, any number of them:
 
-* **Genre**, **Era** (the same decade, within about five years), **Language**, and **Artist** (more
-  of the same artists), from the file tags. A YouTube song borrows the tags of the same artist's
+* **Genre**, **Era** (the same decade, within about five years), **Language**, from the file tags. A YouTube song borrows the tags of the same artist's
   library songs.
+* **Artist**: the artist playing now, one song after another until their songs run out. Loose
+  still mixes in its surprises.
 * **Tempo**: the same pace. Library files rarely have a BPM tag, so the Soulseek upgrader's
   container measures each song in the background (30 seconds of audio through ffmpeg, then beat
   detection), slowly and one song at a time. The panel shows how many songs are done; songs not
   measured yet are skipped by this option.
+
+Changing a setting also redoes an Autoplay pick that is still waiting to start.
 
 **How close** is Loose (a third of the picks ignore the mood), Balanced, or Tight (stay near the
 best few fits). A line under the options says what the radio is following right now, for example

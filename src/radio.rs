@@ -101,8 +101,9 @@ struct Profile {
     years: Vec<i64>,
     language_weight: HashMap<String, f64>,
     bpms: Vec<f64>,
-    artists: HashSet<String>,
+    /// The artist playing now (or last), as shown and as matched.
     latest_artist: String,
+    latest_lead: String,
 }
 
 fn median<T: Copy + PartialOrd>(mut v: Vec<T>) -> Option<T> {
@@ -117,8 +118,8 @@ fn profile(songs: &[RadioSong], recent: &[(String, String)]) -> Profile {
         let (a, t) = (lead_artist(artist), norm(title));
         if n == 0 {
             p.latest_artist = first_artist(artist);
+            p.latest_lead = a.clone();
         }
-        p.artists.insert(a.clone());
         let same_artist: Vec<usize> = (0..songs.len()).filter(|&i| artists[i] == a).collect();
         // The exact song if the index has it, else the artist's other songs, counted lighter.
         let exact: Vec<usize> = same_artist.iter().copied().filter(|&i| norm(&songs[i].title) == t).collect();
@@ -173,6 +174,10 @@ fn describe(mood: &Mood, p: &Profile) -> String {
     parts.join(" \u{b7} ")
 }
 
+fn is_latest_artist(s: &RadioSong, p: &Profile) -> bool {
+    !p.latest_lead.is_empty() && lead_artist(&s.artist) == p.latest_lead
+}
+
 /// How well a song fits the profile, on the dimensions that are switched on. 0 means no fit.
 fn fit(s: &RadioSong, mood: &Mood, p: &Profile) -> f64 {
     let mut score = 0.0;
@@ -208,7 +213,7 @@ fn fit(s: &RadioSong, mood: &Mood, p: &Profile) -> f64 {
             0.0
         };
     }
-    if mood.artist && p.artists.contains(&lead_artist(&s.artist)) {
+    if mood.artist && is_latest_artist(s, p) {
         score += 2.0;
     }
     score
@@ -249,6 +254,10 @@ pub fn pick(
     let mut scored: Vec<(usize, f64)> = pool.iter().map(|&i| (i, fit(&songs[i], mood, &p))).filter(|(_, s)| *s > 0.0).collect();
     if scored.is_empty() || (close == Close::Loose && rnd() < LOOSE_SURPRISE) {
         return Some((randomly(rnd), note));
+    }
+    // The artist option is not a nudge: while the current artist has a song left, it is the pick.
+    if mood.artist && scored.iter().any(|(i, _)| is_latest_artist(&songs[*i], &p)) {
+        scored.retain(|(i, _)| is_latest_artist(&songs[*i], &p));
     }
     scored.sort_by(|a, b| b.1.total_cmp(&a.1));
     let chosen = match close {
@@ -404,6 +413,29 @@ mod tests {
         songs.push(song("Band", "Another By Band", Some("Pop"), Some(1990)));
         let a = pick(&songs, &recent, &only(|m| m.artist = true), Close::Balanced, &mut || 0.5);
         assert_eq!(title(&songs, a), "Another By Band");
+    }
+
+    #[test]
+    fn the_artist_option_follows_the_artist_playing_now_over_everything_else() {
+        let songs = vec![
+            song("Older", "Before", Some("Rock"), Some(1990)),
+            song("Older", "Before Too", Some("Rock"), Some(1990)),
+            song("Rock Band", "Loud", Some("Rock"), Some(1990)),
+            song("Rock Band", "Louder", Some("Pop"), Some(2010)),
+            song("Other", "Same Genre", Some("Rock"), Some(1990)),
+        ];
+        // Newest first: Rock Band is playing now, Older was a few songs ago.
+        let recent = vec![played("Rock Band", "Loud"), played("Other", "Mid"), played("Older", "Before")];
+        let mood = only(|m| {
+            m.artist = true;
+            m.genre = true;
+        });
+        for close in [Close::Balanced, Close::Tight] {
+            for r in [0.0, 0.5, 0.99] {
+                let got = pick(&songs, &recent, &mood, close, &mut || r);
+                assert_eq!(title(&songs, got), "Louder", "{close:?} at {r}");
+            }
+        }
     }
 
     #[test]

@@ -471,6 +471,12 @@ impl Db {
         Ok(true)
     }
 
+    /// Drop songs Autoplay picked that have not started, so a changed setting can pick again.
+    pub fn drop_pending_autoplay(&self, room: &str) -> Result<()> {
+        self.c().execute("DELETE FROM tracks WHERE room = ?1 AND status = 'ready' AND added_by = 'Autoplay'", [room])?;
+        Ok(())
+    }
+
     /// Tracks still waiting to play (queued, being fetched, or ready).
     pub fn open_count(&self, room: &str) -> Result<i64> {
         Ok(self
