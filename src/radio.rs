@@ -25,6 +25,15 @@ const MOOD_SONGS: usize = 5;
 /// The same artist is not picked again within this many songs.
 const ARTIST_GAP: usize = 3;
 
+/// Genres that are talking, not music; the radio never picks them.
+const SPOKEN: &[&str] =
+    &["comedy", "audiobook", "audio book", "spoken word", "spoken", "speech", "podcast", "stand-up", "standup", "interview"];
+
+/// True for songs the radio may play.
+pub fn playable(s: &RadioSong) -> bool {
+    !genres(s.genre.as_deref()).iter().any(|g| SPOKEN.contains(&g.as_str()))
+}
+
 /// A random number in [0, 1), from the operating system's hash seed (no extra dependency).
 fn random() -> f64 {
     (std::collections::hash_map::RandomState::new().build_hasher().finish() >> 11) as f64 / (1u64 << 53) as f64
@@ -114,7 +123,8 @@ pub fn fill(db: &Db, cfg: &Config, room: &Room) -> Result<bool> {
     if !room.autoplay || !db.idle(&room.code)? {
         return Ok(false);
     }
-    let songs = db.radio_songs(&format!("{}/", cfg.cache.display()))?;
+    let mut songs = db.radio_songs(&format!("{}/", cfg.cache.display()))?;
+    songs.retain(playable);
     let recent = db.recent_plays(&room.code, REMEMBERED)?;
     match pick(&songs, &recent, room.mood, &mut random) {
         Some(i) => db.autoplay_insert(&room.code, &songs[i]),
@@ -140,6 +150,15 @@ mod tests {
 
     fn played(artist: &str, title: &str) -> (String, String) {
         (artist.into(), title.into())
+    }
+
+    #[test]
+    fn talking_is_not_music() {
+        assert!(playable(&song("A", "One", Some("Rock"), None)));
+        assert!(playable(&song("A", "Two", None, None)));
+        assert!(!playable(&song("A", "Skit", Some("Comedy"), None)));
+        assert!(!playable(&song("A", "Chapter 1", Some("Audiobook"), None)));
+        assert!(!playable(&song("A", "Mixed", Some("Rock; Comedy"), None)));
     }
 
     #[test]
