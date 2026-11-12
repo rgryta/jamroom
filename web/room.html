@@ -31,6 +31,8 @@
     <p class="msg" id="msg" role="status" aria-live="polite"></p>
   </form>
 
+  <div id="sw"></div>
+
   <section aria-labelledby="h-now">
     <h2 id="h-now">Now playing</h2>
     <div id="now"></div>
@@ -116,6 +118,7 @@
 
   let last = '';
   const render = (s) => {
+    sw.update(s.room);
     clk = s.now && { pos: s.now.position, at: performance.now(), paused: s.now.paused, dur: s.now.duration };
     const json = JSON.stringify({ ...s, now: s.now && { ...s.now, position: 0 } });
     if (json === last) { tickBar(); return; }
@@ -131,13 +134,15 @@
     const q = $('q'); q.textContent = '';
     $('qn').textContent = s.queue.length ? `(${s.queue.length})` : '';
     if (s.queue.length) s.queue.forEach((t) => q.append(row(t)));
-    else q.append(empty('The queue is empty. Add the first song above.'));
+    else q.append(empty(s.room.autoplay ? 'The queue is empty. Autoplay picks the next song when this one ends.' : 'The queue is empty. Add the first song above.'));
     tickBar();
     const r = $('recent'); r.textContent = '';
     if (s.recent.length) s.recent.forEach((t) => r.append(row(t, 'done')));
     else r.append(empty('Nothing has played yet.'));
   };
 
+  const sw = Jam.switches(api, (s) => render(s));
+  $('sw').append(sw.node);
   const load = () => api('/state').then(render).catch((e) => say(e.message, 'err'));
 
   $('f').addEventListener('submit', async (e) => {

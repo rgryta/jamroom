@@ -104,6 +104,7 @@ pub fn read_entry(path: &Path, root: &Path) -> Option<LibEntry> {
     if tn.is_empty() {
         return None;
     }
+    let text = |v: Option<std::borrow::Cow<'_, str>>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     Some(LibEntry {
         path: path.to_string_lossy().into_owned(),
         mtime: mtime(path),
@@ -111,6 +112,11 @@ pub fn read_entry(path: &Path, root: &Path) -> Option<LibEntry> {
         title,
         tn,
         duration: (duration > 0.0).then_some(duration),
+        album: text(tag.and_then(|t| t.album())),
+        genre: text(tag.and_then(|t| t.genre())),
+        year: tag
+            .and_then(|t| t.get_string(ItemKey::Year).or_else(|| t.get_string(ItemKey::RecordingDate)))
+            .and_then(|y| y.trim().get(..4)?.parse().ok()),
     })
 }
 
@@ -127,7 +133,7 @@ pub fn scan(db: &Db, roots: &[&Path]) -> Result<(usize, usize)> {
     let mut batch = Vec::new();
     for (p, root) in &files {
         let key = p.to_string_lossy();
-        if known.get(key.as_ref()) == Some(&mtime(p)) {
+        if known.get(key.as_ref()).is_some_and(|(m, v)| *m == mtime(p) && *v >= 1) {
             continue;
         }
         if let Some(e) = read_entry(p, root) {
@@ -352,6 +358,7 @@ mod tests {
                 title: "Feel Good Inc.".into(),
                 tn: norm("Feel Good Inc."),
                 duration: Some(d),
+                ..Default::default()
             })
             .unwrap();
         };
@@ -380,6 +387,7 @@ mod tests {
                 title: title.into(),
                 tn: norm(title),
                 duration: Some(d),
+                ..Default::default()
             })
             .unwrap()
         };

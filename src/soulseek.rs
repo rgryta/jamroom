@@ -760,6 +760,7 @@ mod tests {
             title: "Song".into(),
             tn: norm("Song"),
             duration: Some(duration),
+            ..Default::default()
         };
         db.lib_upsert(&own(100.0)).unwrap();
         tick(&cfg, &db, &sl).await.unwrap();

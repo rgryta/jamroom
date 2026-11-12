@@ -74,8 +74,41 @@ window.Jam = (() => {
     window.addEventListener('online', fn);
   };
 
+  // The Autoplay and "keep the mood" switches for one room. `onState` receives the room state the
+  // server answers with. `update(room)` shows what the server says, except just after a local change.
+  const switches = (api, onState) => {
+    let touched = -Infinity;
+    const make = (label, hint) => {
+      const lab = el('label', 'switch');
+      const input = el('input');
+      input.type = 'checkbox';
+      input.setAttribute('role', 'switch');
+      const text = el('span', 'switch-text');
+      text.append(el('span', 'switch-label', label), el('span', 'switch-hint', hint));
+      lab.append(input, el('span', 'switch-track'), text);
+      return { lab, input };
+    };
+    const auto = make('Autoplay', 'When the queue is empty, keep playing songs from the library.');
+    const mood = make('Keep the mood', 'Pick songs like the ones that just played, not at random.');
+    const node = el('div', 'switches');
+    node.append(auto.lab, mood.lab);
+    const send = (body) => {
+      touched = performance.now();
+      api('/settings', 'POST', body).then(onState).catch(() => {});
+    };
+    auto.input.addEventListener('change', () => send({ autoplay: auto.input.checked }));
+    mood.input.addEventListener('change', () => send({ mood: mood.input.checked }));
+    const update = (room) => {
+      if (!room || performance.now() - touched < 2500) return;
+      auto.input.checked = !!room.autoplay;
+      mood.input.checked = !!room.mood;
+      mood.lab.classList.toggle('dim', !room.autoplay);
+    };
+    return { node, update };
+  };
+
   const STATUS = { queued: 'Waiting', working: 'Fetching', ready: 'Ready', playing: 'Playing', played: 'Played', failed: 'Failed' };
   const chip = (t) => el('span', 'chip ' + (t.status === 'queued' ? '' : t.status), STATUS[t.status] || t.status);
 
-  return { el, sleeve, roomApi, clock, chip, every, onWake };
+  return { el, sleeve, roomApi, clock, chip, every, onWake, switches };
 })();

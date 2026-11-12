@@ -61,6 +61,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/r/{code}/add", post(add))
         .route("/api/r/{code}/advance", post(advance))
         .route("/api/r/{code}/next", post(next))
+        .route("/api/r/{code}/settings", post(settings))
         .route("/api/r/{code}/pause", post(pause))
         .route("/api/r/{code}/resume", post(resume))
         .route("/api/r/{code}/seek", post(seek))
@@ -132,7 +133,8 @@ async fn player_page(State(app): Shared, ConnectInfo(a): Client, h: HeaderMap, P
 
 fn state_json(app: &App, room: &Room) -> Result<Json<Value>, ApiError> {
     let s = app.db.snapshot(&room.code)?;
-    Ok(Json(json!({ "room": { "code": room.code, "name": room.name }, "now": s.now, "queue": s.queue, "recent": s.recent })))
+    let room = json!({ "code": room.code, "name": room.name, "autoplay": room.autoplay, "mood": room.mood });
+    Ok(Json(json!({ "room": room, "now": s.now, "queue": s.queue, "recent": s.recent })))
 }
 
 async fn state(State(app): Shared, ConnectInfo(a): Client, h: HeaderMap, Path(code): Path<String>) -> Result<Json<Value>, ApiError> {
@@ -184,7 +186,36 @@ async fn add(
 
 async fn advance(State(app): Shared, ConnectInfo(a): Client, h: HeaderMap, Path(code): Path<String>) -> Result<Json<Value>, ApiError> {
     let room = live_room(&app, &client_ip(&h, a), &code)?;
-    app.db.claim_next(&room.code)?;
+    start_next(&app, &room)?;
+    state_json(&app, &room)
+}
+
+/// Start the next queued song; if the queue is dry and Autoplay is on, queue one from the library first.
+fn start_next(app: &App, room: &Room) -> Result<(), ApiError> {
+    if app.db.claim_next(&room.code)?.is_none() && crate::radio::fill(&app.db, &app.cfg, room)? {
+        app.db.claim_next(&room.code)?;
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct SettingsReq {
+    autoplay: Option<bool>,
+    mood: Option<bool>,
+}
+
+async fn settings(
+    State(app): Shared,
+    ConnectInfo(a): Client,
+    h: HeaderMap,
+    Path(code): Path<String>,
+    Json(req): Json<SettingsReq>,
+) -> Result<Json<Value>, ApiError> {
+    let room = live_room(&app, &client_ip(&h, a), &code)?;
+    app.db.set_room_flags(&room.code, req.autoplay, req.mood)?;
+    let room = live_room(&app, &client_ip(&h, a), &code)?;
+    // Turning Autoplay on in a quiet room starts the radio now.
+    crate::radio::fill(&app.db, &app.cfg, &room)?;
     state_json(&app, &room)
 }
 
@@ -205,7 +236,7 @@ async fn next(
     if let Some(id) = q.done {
         app.db.finish_track(&room.code, id)?;
     }
-    app.db.claim_next(&room.code)?;
+    start_next(&app, &room)?;
     state_json(&app, &room)
 }
 
@@ -429,6 +460,48 @@ mod tests {
         assert_eq!(call(&r, "GET", "/assets/jam.css", false, None).await.0, StatusCode::OK);
         assert_eq!(call(&r, "GET", "/assets/jam.js", false, None).await.0, StatusCode::OK);
         assert_eq!(call(&r, "GET", "/assets/tick.js", false, None).await.0, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn autoplay_keeps_a_quiet_room_going_from_the_library_until_it_is_turned_off() {
+        use crate::{db::LibEntry, norm::norm};
+        let (app, r) = app_with_room();
+        for (artist, title) in [("A", "One"), ("B", "Two"), ("C", "Three")] {
+            app.db
+                .lib_upsert(&LibEntry {
+                    path: format!("/m/{title}.flac"),
+                    mtime: 1,
+                    artist: artist.into(),
+                    title: title.into(),
+                    tn: norm(title),
+                    duration: Some(200.0),
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        let now = |b: &[u8]| serde_json::from_slice::<Value>(b).unwrap();
+        // Off by default: a quiet room stays quiet.
+        let (_, b) = call(&r, "POST", "/api/r/room1/advance", false, None).await;
+        assert!(now(&b)["now"].is_null() && now(&b)["room"]["autoplay"] == false);
+        // Turning it on starts the radio: the first song is queued, and the next advance plays it.
+        let (st, b) = call(&r, "POST", "/api/r/room1/settings", false, Some(json!({"autoplay": true, "mood": true}))).await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(now(&b)["room"]["autoplay"] == true && now(&b)["room"]["mood"] == true);
+        assert_eq!(now(&b)["queue"].as_array().unwrap().len(), 1);
+        let (_, b) = call(&r, "POST", "/api/r/room1/advance", false, None).await;
+        let first = now(&b)["now"].clone();
+        assert_eq!((first["status"].as_str(), first["added_by"].as_str()), (Some("playing"), Some("Autoplay")));
+        // When it ends, another song follows without anyone queueing anything, and not the same one.
+        let id = first["id"].as_i64().unwrap();
+        let (_, b) = call(&r, "POST", &format!("/api/r/room1/next?done={id}"), false, None).await;
+        let second = now(&b)["now"].clone();
+        assert_eq!(second["added_by"].as_str(), Some("Autoplay"));
+        assert_ne!(second["title"], first["title"]);
+        // Someone's own song always goes first, and turning Autoplay off ends the radio.
+        call(&r, "POST", "/api/r/room1/settings", false, Some(json!({"autoplay": false}))).await;
+        let id = second["id"].as_i64().unwrap();
+        let (_, b) = call(&r, "POST", &format!("/api/r/room1/next?done={id}"), false, None).await;
+        assert!(now(&b)["now"].is_null(), "no radio once Autoplay is off");
     }
 
     #[tokio::test]

@@ -50,6 +50,10 @@ pub struct Room {
     pub name: String,
     pub revoked: bool,
     pub created_at: i64,
+    /// When the queue runs dry, keep playing songs from the library.
+    pub autoplay: bool,
+    /// With Autoplay: stay close to what has been playing instead of picking at random.
+    pub mood: bool,
 }
 
 /// A queue entry as shown to clients (no file paths or source URLs).
@@ -115,7 +119,7 @@ pub struct Upgrade {
     pub updated_at: i64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LibEntry {
     pub path: String,
     pub mtime: i64,
@@ -123,6 +127,21 @@ pub struct LibEntry {
     pub title: String,
     pub tn: String,
     pub duration: Option<f64>,
+    pub album: Option<String>,
+    pub genre: Option<String>,
+    pub year: Option<i64>,
+}
+
+/// A library song the radio can play.
+#[derive(Debug, Clone, Default)]
+pub struct RadioSong {
+    pub path: String,
+    pub artist: String,
+    pub title: String,
+    pub album: Option<String>,
+    pub duration: f64,
+    pub genre: Option<String>,
+    pub year: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -130,6 +149,17 @@ pub struct Snapshot {
     pub now: Option<Track>,
     pub queue: Vec<Track>,
     pub recent: Vec<Track>,
+}
+
+fn room_from(r: &Row) -> rusqlite::Result<Room> {
+    Ok(Room {
+        code: r.get(0)?,
+        name: r.get(1)?,
+        revoked: r.get::<_, i64>(2)? != 0,
+        created_at: r.get(3)?,
+        autoplay: r.get::<_, i64>(4)? != 0,
+        mood: r.get::<_, i64>(5)? != 0,
+    })
 }
 
 const TRACK_COLS: &str = "id, status, artist, title, album, duration, cover, added_by, error, started_ms, paused_pos";
@@ -171,10 +201,22 @@ impl Db {
     fn init(conn: Connection) -> Result<Db> {
         conn.execute_batch(SCHEMA)?;
         // Columns added after the first release; older databases get them here.
-        for (col, decl) in [("started_ms", "INTEGER"), ("paused_pos", "REAL")] {
-            let has: i64 = conn.query_row("SELECT COUNT(*) FROM pragma_table_info('tracks') WHERE name = ?1", [col], |r| r.get(0))?;
+        let added = [
+            ("tracks", "started_ms", "INTEGER"),
+            ("tracks", "paused_pos", "REAL"),
+            ("rooms", "autoplay", "INTEGER NOT NULL DEFAULT 0"),
+            ("rooms", "mood", "INTEGER NOT NULL DEFAULT 0"),
+            ("library", "album", "TEXT"),
+            ("library", "genre", "TEXT"),
+            ("library", "year", "INTEGER"),
+            // 0 = indexed before genre and year were read, so the next scan reads the file again.
+            ("library", "v", "INTEGER NOT NULL DEFAULT 0"),
+        ];
+        for (table, col, decl) in added {
+            let has: i64 =
+                conn.query_row(&format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = ?1"), [col], |r| r.get(0))?;
             if has == 0 {
-                conn.execute_batch(&format!("ALTER TABLE tracks ADD COLUMN {col} {decl}"))?;
+                conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} {decl}"))?;
             }
         }
         Ok(Db { conn: Mutex::new(conn) })
@@ -194,18 +236,27 @@ impl Db {
     pub fn room(&self, code: &str) -> Result<Option<Room>> {
         Ok(self
             .c()
-            .query_row("SELECT code, name, revoked, created_at FROM rooms WHERE code = ?1", [code], |r| {
-                Ok(Room { code: r.get(0)?, name: r.get(1)?, revoked: r.get::<_, i64>(2)? != 0, created_at: r.get(3)? })
-            })
+            .query_row("SELECT code, name, revoked, created_at, autoplay, mood FROM rooms WHERE code = ?1", [code], room_from)
             .optional()?)
     }
 
     pub fn rooms(&self) -> Result<Vec<Room>> {
         let c = self.c();
-        let mut st = c.prepare("SELECT code, name, revoked, created_at FROM rooms ORDER BY created_at")?;
-        let rows =
-            st.query_map([], |r| Ok(Room { code: r.get(0)?, name: r.get(1)?, revoked: r.get::<_, i64>(2)? != 0, created_at: r.get(3)? }))?;
+        let mut st = c.prepare("SELECT code, name, revoked, created_at, autoplay, mood FROM rooms ORDER BY created_at")?;
+        let rows = st.query_map([], room_from)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Turn Autoplay and the mood on or off for a room. `None` leaves a setting as it is.
+    pub fn set_room_flags(&self, code: &str, autoplay: Option<bool>, mood: Option<bool>) -> Result<()> {
+        let c = self.c();
+        if let Some(a) = autoplay {
+            c.execute("UPDATE rooms SET autoplay = ?2 WHERE code = ?1", params![code, a])?;
+        }
+        if let Some(m) = mood {
+            c.execute("UPDATE rooms SET mood = ?2 WHERE code = ?1", params![code, m])?;
+        }
+        Ok(())
     }
 
     pub fn revoke_room(&self, code: &str) -> Result<bool> {
@@ -222,6 +273,69 @@ impl Db {
             params![room, t.artist, t.dir_artist, t.title, t.album, t.duration, t.cover, t.src, t.query, t.added_by, now()],
         )?;
         Ok(c.last_insert_rowid())
+    }
+
+    /// True when nothing in the room is playing or waiting.
+    pub fn idle(&self, room: &str) -> Result<bool> {
+        let n: i64 = self.c().query_row(
+            "SELECT COUNT(*) FROM tracks WHERE room = ?1 AND status IN ('queued','working','ready','playing')",
+            [room],
+            |r| r.get(0),
+        )?;
+        Ok(n == 0)
+    }
+
+    /// The room's latest plays, newest first: (artist, title).
+    pub fn recent_plays(&self, room: &str, n: i64) -> Result<Vec<(String, String)>> {
+        let c = self.c();
+        let mut st =
+            c.prepare("SELECT artist, title FROM tracks WHERE room = ?1 AND status IN ('playing','played') ORDER BY id DESC LIMIT ?2")?;
+        let rows = st.query_map(params![room, n], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Songs the radio may play: library files (not the download cache) of a sensible length.
+    pub fn radio_songs(&self, cache_prefix: &str) -> Result<Vec<RadioSong>> {
+        let c = self.c();
+        let mut st = c.prepare(
+            "SELECT path, artist, title, album, duration, genre, year FROM library
+             WHERE substr(path, 1, length(?1)) != ?1 AND duration BETWEEN 60 AND 900",
+        )?;
+        let rows = st.query_map([cache_prefix], |r| {
+            Ok(RadioSong {
+                path: r.get(0)?,
+                artist: r.get(1)?,
+                title: r.get(2)?,
+                album: r.get(3)?,
+                duration: r.get(4)?,
+                genre: r.get(5)?,
+                year: r.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Queue a library song for the room, ready to play, but only if the room is still idle, so
+    /// two players asking at once cannot queue two songs. True when it was queued.
+    pub fn autoplay_insert(&self, room: &str, s: &RadioSong) -> Result<bool> {
+        let mut c = self.c();
+        let tx = c.transaction()?;
+        let busy: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM tracks WHERE room = ?1 AND status IN ('queued','working','ready','playing')",
+            [room],
+            |r| r.get(0),
+        )?;
+        if busy > 0 {
+            return Ok(false);
+        }
+        let lead = s.artist.split([',', ';']).next().unwrap_or(&s.artist).trim().to_string();
+        tx.execute(
+            "INSERT INTO tracks(room, status, artist, dir_artist, title, album, duration, file, added_by, added_at)
+             VALUES(?1, 'ready', ?2, ?3, ?4, ?5, ?6, ?7, 'Autoplay', ?8)",
+            params![room, s.artist, lead, s.title, s.album, s.duration, s.path, now()],
+        )?;
+        tx.commit()?;
+        Ok(true)
     }
 
     /// Tracks still waiting to play (queued, being fetched, or ready).
@@ -493,19 +607,22 @@ impl Db {
         let tx = c.transaction()?;
         for e in entries {
             tx.execute(
-                "INSERT INTO library(path, mtime, artist, title, tn, duration) VALUES(?1, ?2, ?3, ?4, ?5, ?6)
-                 ON CONFLICT(path) DO UPDATE SET mtime = ?2, artist = ?3, title = ?4, tn = ?5, duration = ?6",
-                params![e.path, e.mtime, e.artist, e.title, e.tn, e.duration],
+                "INSERT INTO library(path, mtime, artist, title, tn, duration, album, genre, year, v)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1)
+                 ON CONFLICT(path) DO UPDATE SET mtime = ?2, artist = ?3, title = ?4, tn = ?5, duration = ?6,
+                     album = ?7, genre = ?8, year = ?9, v = 1",
+                params![e.path, e.mtime, e.artist, e.title, e.tn, e.duration, e.album, e.genre, e.year],
             )?;
         }
         tx.commit()?;
         Ok(())
     }
 
-    pub fn lib_known(&self) -> Result<HashMap<String, i64>> {
+    /// Every indexed path with its file time and how it was read (0 = before genre and year were kept).
+    pub fn lib_known(&self) -> Result<HashMap<String, (i64, i64)>> {
         let c = self.c();
-        let mut st = c.prepare("SELECT path, mtime FROM library")?;
-        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        let mut st = c.prepare("SELECT path, mtime, v FROM library")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -689,6 +806,52 @@ mod tests {
     }
 
     #[test]
+    fn autoplay_queues_one_ready_song_only_when_the_room_is_idle() {
+        let db = Db::memory().unwrap();
+        db.create_room("r", "Office").unwrap();
+        assert!(!db.room("r").unwrap().unwrap().autoplay);
+        db.set_room_flags("r", Some(true), None).unwrap();
+        db.set_room_flags("r", None, Some(true)).unwrap();
+        let room = db.room("r").unwrap().unwrap();
+        assert!(room.autoplay && room.mood);
+        let song =
+            RadioSong { path: "/m/a.flac".into(), artist: "A, B".into(), title: "One".into(), duration: 200.0, ..Default::default() };
+        assert!(db.idle("r").unwrap());
+        assert!(db.autoplay_insert("r", &song).unwrap());
+        assert!(!db.autoplay_insert("r", &song).unwrap(), "a second player asking at the same moment queues nothing");
+        assert!(!db.idle("r").unwrap());
+        let t = db.claim_next("r").unwrap().unwrap();
+        assert_eq!((t.status.as_str(), t.added_by.as_deref(), t.title.as_str()), ("playing", Some("Autoplay"), "One"));
+        assert_eq!(db.track_file("r", t.id).unwrap().as_deref(), Some("/m/a.flac"));
+        assert_eq!(db.recent_plays("r", 5).unwrap(), vec![("A, B".to_string(), "One".to_string())]);
+    }
+
+    #[test]
+    fn the_radio_only_offers_library_songs_of_a_sensible_length() {
+        let db = Db::memory().unwrap();
+        let add = |path: &str, d: f64| {
+            db.lib_upsert(&LibEntry {
+                path: path.into(),
+                mtime: 1,
+                artist: "A".into(),
+                title: path.into(),
+                tn: path.into(),
+                duration: Some(d),
+                genre: Some("Rock".into()),
+                ..Default::default()
+            })
+            .unwrap()
+        };
+        add("/music/ok.flac", 200.0);
+        add("/music/jingle.flac", 20.0);
+        add("/music/mix.flac", 3600.0);
+        add("/data/songs/cached.m4a", 200.0);
+        let songs = db.radio_songs("/data/songs/").unwrap();
+        assert_eq!(songs.len(), 1);
+        assert_eq!((songs[0].path.as_str(), songs[0].genre.as_deref()), ("/music/ok.flac", Some("Rock")));
+    }
+
+    #[test]
     fn restart_requeues_half_done_work() {
         let db = Db::memory().unwrap();
         let a = db.add_track("r", &track("one")).unwrap();
@@ -748,6 +911,7 @@ mod tests {
             title: "Song".into(),
             tn: "song".into(),
             duration: Some(200.0),
+            ..Default::default()
         };
         db.lib_upsert(&e).unwrap();
         assert_eq!(db.lib_by_title("song").unwrap().len(), 1);

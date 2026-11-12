@@ -8,6 +8,7 @@ mod db;
 mod fetch;
 mod library;
 mod norm;
+mod radio;
 mod resolve;
 mod soulseek;
 mod web;

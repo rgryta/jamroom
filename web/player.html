@@ -55,6 +55,8 @@
       </div>
       <p class="status" id="net" role="status" aria-live="polite"></p>
 
+      <div id="sw"></div>
+
       <div class="upnext">
         <h2>Up next</h2>
         <ol class="list" id="next"></ol>
@@ -95,7 +97,7 @@
   const upNext = (s) => {
     const list = $('next'); list.textContent = '';
     const up = s.queue.filter((t) => !s.now || t.id !== s.now.id);
-    if (!up.length) { list.append(el('li', 'empty', 'Nothing queued. Add a song from your phone.')); return; }
+    if (!up.length) { list.append(el('li', 'empty', s.room.autoplay ? 'Nothing queued. Autoplay picks the next song.' : 'Nothing queued. Add a song from your phone.')); return; }
     up.slice(0, 5).forEach((t) => {
       const li = el('li', 'track');
       const mid = el('div');
@@ -107,6 +109,7 @@
   };
 
   const show = (s, delay) => {
+    sw.update(s.room);
     const now = s.now;
     sync = now && { id: now.id, pos: now.position + (now.paused ? 0 : delay), at: performance.now(), paused: now.paused, dur: now.duration };
     if (now && now.id !== cur) {
@@ -127,7 +130,7 @@
       $('roomname').textContent = s.room.name;
       document.title = now ? `${now.title} · jamroom` : 'jamroom player';
       $('tt').textContent = now ? now.title : '';
-      $('idle').textContent = now ? '' : s.queue.length ? 'Getting the next song ready…' : 'Waiting for songs';
+      $('idle').textContent = now ? '' : s.queue.length ? 'Getting the next song ready…' : s.room.autoplay ? 'Picking the next song…' : 'Waiting for songs';
       $('artist').textContent = now ? now.artist : '';
       $('by').textContent = now && now.added_by ? `added by ${now.added_by}` : '';
       $('art').textContent = '';
@@ -159,8 +162,11 @@
 
   const poll = async () => {
     const s = await run('/state');
-    if (s && !s.now && s.queue.length) await run('/advance', 'POST');
+    if (s && !s.now && (s.queue.length || s.room.autoplay)) await run('/advance', 'POST');
   };
+
+  const sw = Jam.switches(api, (s) => show(s, 0));
+  $('sw').append(sw.node);
 
   const skip = () => { if (cur !== null) run(`/next?done=${cur}`, 'POST'); };
   const toggle = () => { if (sync) run(sync.paused ? '/resume' : '/pause', 'POST'); };

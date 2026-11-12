@@ -44,6 +44,18 @@ copy stay in the cache and are tried again after 14 days.
 
 Downloads are about 128 kbps AAC, which is what YouTube serves.
 
+## Autoplay
+
+Each room has two switches, on the add page and on the player (both off to start):
+
+* **Autoplay**: when the queue is empty, queue a song from the music library, so the room keeps
+  playing like a radio. Library songs start at once at full quality and nothing is downloaded.
+  Someone's own songs always go first. None of the room's last 60 plays comes round again, and
+  the same artist is not picked within three songs.
+* **Keep the mood**: instead of a random song, favour songs that share a genre or a decade with
+  the last five that played (genre and year come from the file tags; a YouTube song borrows the
+  tags of the same artist's library songs). With no clue it falls back to a random song.
+
 ## Playing in sync
 
 The server keeps one playback clock per room (the playing song's start time, or the spot where it
