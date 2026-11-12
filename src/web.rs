@@ -133,8 +133,16 @@ async fn player_page(State(app): Shared, ConnectInfo(a): Client, h: HeaderMap, P
 
 fn state_json(app: &App, room: &Room) -> Result<Json<Value>, ApiError> {
     let s = app.db.snapshot(&room.code)?;
-    let room = json!({ "code": room.code, "name": room.name, "autoplay": room.autoplay, "mood": room.mood });
-    Ok(Json(json!({ "room": room, "now": s.now, "queue": s.queue, "recent": s.recent })))
+    let mut room_json = json!({
+        "code": room.code, "name": room.name, "autoplay": room.autoplay,
+        "mood": room.mood, "close": room.close, "mood_note": room.mood_note,
+    });
+    if room.autoplay {
+        // How much of the library has a measured tempo, so the page can say the Tempo option is still learning.
+        let (known, total) = app.db.tempo_stats(&format!("{}/", app.cfg.cache.display()))?;
+        room_json["tempo"] = json!({ "known": known, "total": total });
+    }
+    Ok(Json(json!({ "room": room_json, "now": s.now, "queue": s.queue, "recent": s.recent })))
 }
 
 async fn state(State(app): Shared, ConnectInfo(a): Client, h: HeaderMap, Path(code): Path<String>) -> Result<Json<Value>, ApiError> {
@@ -201,7 +209,8 @@ fn start_next(app: &App, room: &Room) -> Result<(), ApiError> {
 #[derive(Deserialize)]
 struct SettingsReq {
     autoplay: Option<bool>,
-    mood: Option<bool>,
+    mood: Option<crate::db::MoodPatch>,
+    close: Option<crate::db::Close>,
 }
 
 async fn settings(
@@ -212,7 +221,7 @@ async fn settings(
     Json(req): Json<SettingsReq>,
 ) -> Result<Json<Value>, ApiError> {
     let room = live_room(&app, &client_ip(&h, a), &code)?;
-    app.db.set_room_flags(&room.code, req.autoplay, req.mood)?;
+    app.db.set_room_flags(&room.code, req.autoplay, req.mood.as_ref(), req.close)?;
     let room = live_room(&app, &client_ip(&h, a), &code)?;
     // Turning Autoplay on in a quiet room starts the radio now.
     crate::radio::fill(&app.db, &app.cfg, &room)?;
@@ -484,9 +493,19 @@ mod tests {
         let (_, b) = call(&r, "POST", "/api/r/room1/advance", false, None).await;
         assert!(now(&b)["now"].is_null() && now(&b)["room"]["autoplay"] == false);
         // Turning it on starts the radio: the first song is queued, and the next advance plays it.
-        let (st, b) = call(&r, "POST", "/api/r/room1/settings", false, Some(json!({"autoplay": true, "mood": true}))).await;
+        let (st, b) = call(
+            &r,
+            "POST",
+            "/api/r/room1/settings",
+            false,
+            Some(json!({"autoplay": true, "mood": {"genre": true, "tempo": true}, "close": "tight"})),
+        )
+        .await;
         assert_eq!(st, StatusCode::OK);
-        assert!(now(&b)["room"]["autoplay"] == true && now(&b)["room"]["mood"] == true);
+        let room = &now(&b)["room"];
+        assert!(room["autoplay"] == true && room["mood"]["genre"] == true && room["mood"]["tempo"] == true && room["mood"]["era"] == false);
+        assert_eq!(room["close"], "tight");
+        assert_eq!(room["tempo"]["total"], 3, "the page is told how much of the library has a measured tempo");
         assert_eq!(now(&b)["queue"].as_array().unwrap().len(), 1);
         let (_, b) = call(&r, "POST", "/api/r/room1/advance", false, None).await;
         let first = now(&b)["now"].clone();

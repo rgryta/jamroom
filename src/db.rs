@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     path::Path,
@@ -44,6 +44,65 @@ pub struct Db {
     conn: Mutex<Connection>,
 }
 
+/// What Autoplay follows when it picks the next song. All off means a random song.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct Mood {
+    pub genre: bool,
+    pub era: bool,
+    pub artist: bool,
+    pub language: bool,
+    pub tempo: bool,
+}
+
+impl Mood {
+    pub fn any(&self) -> bool {
+        self.genre || self.era || self.artist || self.language || self.tempo
+    }
+
+    fn from_db(s: &str) -> Mood {
+        let has = |k: &str| s.split(',').any(|p| p == k);
+        Mood { genre: has("genre"), era: has("era"), artist: has("artist"), language: has("language"), tempo: has("tempo") }
+    }
+
+    fn to_db(&self) -> String {
+        [("genre", self.genre), ("era", self.era), ("artist", self.artist), ("language", self.language), ("tempo", self.tempo)]
+            .iter()
+            .filter(|(_, on)| *on)
+            .map(|(k, _)| *k)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
+/// A change to the mood: only the named options are touched.
+#[derive(Debug, Default, Deserialize)]
+pub struct MoodPatch {
+    pub genre: Option<bool>,
+    pub era: Option<bool>,
+    pub artist: Option<bool>,
+    pub language: Option<bool>,
+    pub tempo: Option<bool>,
+}
+
+/// How closely Autoplay follows the mood: loose mixes in surprises, tight stays near the best fits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Close {
+    Loose,
+    Balanced,
+    Tight,
+}
+
+impl Close {
+    fn from_db(n: i64) -> Close {
+        match n {
+            0 => Close::Loose,
+            2 => Close::Tight,
+            _ => Close::Balanced,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Room {
     pub code: String,
@@ -52,8 +111,11 @@ pub struct Room {
     pub created_at: i64,
     /// When the queue runs dry, keep playing songs from the library.
     pub autoplay: bool,
-    /// With Autoplay: stay close to what has been playing instead of picking at random.
-    pub mood: bool,
+    /// What Autoplay follows; nothing means a random song.
+    pub mood: Mood,
+    pub close: Close,
+    /// What the last Autoplay pick followed, for example "Rock · 1990s".
+    pub mood_note: String,
 }
 
 /// A queue entry as shown to clients (no file paths or source URLs).
@@ -130,6 +192,9 @@ pub struct LibEntry {
     pub album: Option<String>,
     pub genre: Option<String>,
     pub year: Option<i64>,
+    /// Beats per minute, if the file's tag says so.
+    pub bpm: Option<f64>,
+    pub language: Option<String>,
 }
 
 /// A library song the radio can play.
@@ -142,6 +207,10 @@ pub struct RadioSong {
     pub duration: f64,
     pub genre: Option<String>,
     pub year: Option<i64>,
+    pub bpm: Option<f64>,
+    pub language: Option<String>,
+    /// In the download cache rather than the music library: it helps to learn the mood, but is not played.
+    pub cached: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -158,7 +227,9 @@ fn room_from(r: &Row) -> rusqlite::Result<Room> {
         revoked: r.get::<_, i64>(2)? != 0,
         created_at: r.get(3)?,
         autoplay: r.get::<_, i64>(4)? != 0,
-        mood: r.get::<_, i64>(5)? != 0,
+        mood: Mood::from_db(&r.get::<_, String>(5)?),
+        close: Close::from_db(r.get(6)?),
+        mood_note: r.get(7)?,
     })
 }
 
@@ -206,10 +277,15 @@ impl Db {
             ("tracks", "paused_pos", "REAL"),
             ("rooms", "autoplay", "INTEGER NOT NULL DEFAULT 0"),
             ("rooms", "mood", "INTEGER NOT NULL DEFAULT 0"),
+            ("rooms", "mood_opts", "TEXT NOT NULL DEFAULT ''"),
+            ("rooms", "mood_close", "INTEGER NOT NULL DEFAULT 1"),
+            ("rooms", "mood_note", "TEXT NOT NULL DEFAULT ''"),
+            ("library", "bpm", "REAL"),
+            ("library", "language", "TEXT"),
             ("library", "album", "TEXT"),
             ("library", "genre", "TEXT"),
             ("library", "year", "INTEGER"),
-            // 0 = indexed before genre and year were read, so the next scan reads the file again.
+            // Below 2 = indexed before genre, year, tempo and language were kept, so the next scan reads the file again.
             ("library", "v", "INTEGER NOT NULL DEFAULT 0"),
         ];
         for (table, col, decl) in added {
@@ -219,6 +295,8 @@ impl Db {
                 conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} {decl}"))?;
             }
         }
+        // The first Autoplay had one "keep the mood" switch; it meant genre and era.
+        conn.execute("UPDATE rooms SET mood_opts = 'genre,era', mood = 0 WHERE mood = 1 AND mood_opts = ''", [])?;
         Ok(Db { conn: Mutex::new(conn) })
     }
 
@@ -236,26 +314,52 @@ impl Db {
     pub fn room(&self, code: &str) -> Result<Option<Room>> {
         Ok(self
             .c()
-            .query_row("SELECT code, name, revoked, created_at, autoplay, mood FROM rooms WHERE code = ?1", [code], room_from)
+            .query_row(
+                "SELECT code, name, revoked, created_at, autoplay, mood_opts, mood_close, mood_note FROM rooms WHERE code = ?1",
+                [code],
+                room_from,
+            )
             .optional()?)
     }
 
     pub fn rooms(&self) -> Result<Vec<Room>> {
         let c = self.c();
-        let mut st = c.prepare("SELECT code, name, revoked, created_at, autoplay, mood FROM rooms ORDER BY created_at")?;
+        let mut st =
+            c.prepare("SELECT code, name, revoked, created_at, autoplay, mood_opts, mood_close, mood_note FROM rooms ORDER BY created_at")?;
         let rows = st.query_map([], room_from)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Turn Autoplay and the mood on or off for a room. `None` leaves a setting as it is.
-    pub fn set_room_flags(&self, code: &str, autoplay: Option<bool>, mood: Option<bool>) -> Result<()> {
+    pub fn set_room_flags(&self, code: &str, autoplay: Option<bool>, mood: Option<&MoodPatch>, close: Option<Close>) -> Result<()> {
         let c = self.c();
         if let Some(a) = autoplay {
             c.execute("UPDATE rooms SET autoplay = ?2 WHERE code = ?1", params![code, a])?;
         }
-        if let Some(m) = mood {
-            c.execute("UPDATE rooms SET mood = ?2 WHERE code = ?1", params![code, m])?;
+        if let Some(p) = mood {
+            let current: String = c.query_row("SELECT mood_opts FROM rooms WHERE code = ?1", [code], |r| r.get(0))?;
+            let mut m = Mood::from_db(&current);
+            m.genre = p.genre.unwrap_or(m.genre);
+            m.era = p.era.unwrap_or(m.era);
+            m.artist = p.artist.unwrap_or(m.artist);
+            m.language = p.language.unwrap_or(m.language);
+            m.tempo = p.tempo.unwrap_or(m.tempo);
+            c.execute("UPDATE rooms SET mood_opts = ?2 WHERE code = ?1", params![code, m.to_db()])?;
         }
+        if let Some(close) = close {
+            let n = match close {
+                Close::Loose => 0,
+                Close::Balanced => 1,
+                Close::Tight => 2,
+            };
+            c.execute("UPDATE rooms SET mood_close = ?2 WHERE code = ?1", params![code, n])?;
+        }
+        Ok(())
+    }
+
+    /// Remember what the latest Autoplay pick followed, to show in the room.
+    pub fn set_mood_note(&self, code: &str, note: &str) -> Result<()> {
+        self.c().execute("UPDATE rooms SET mood_note = ?2 WHERE code = ?1", params![code, note])?;
         Ok(())
     }
 
@@ -298,8 +402,8 @@ impl Db {
     pub fn radio_songs(&self, cache_prefix: &str) -> Result<Vec<RadioSong>> {
         let c = self.c();
         let mut st = c.prepare(
-            "SELECT path, artist, title, album, duration, genre, year FROM library
-             WHERE substr(path, 1, length(?1)) != ?1 AND duration BETWEEN 60 AND 900",
+            "SELECT path, artist, title, album, duration, genre, year, bpm, language, substr(path, 1, length(?1)) = ?1
+             FROM library WHERE duration BETWEEN 60 AND 900",
         )?;
         let rows = st.query_map([cache_prefix], |r| {
             Ok(RadioSong {
@@ -310,9 +414,38 @@ impl Db {
                 duration: r.get(4)?,
                 genre: r.get(5)?,
                 year: r.get(6)?,
+                bpm: r.get(7)?,
+                language: r.get(8)?,
+                cached: r.get(9)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Songs still without a tempo (0 means "looked, no clear beat"), cached ones first.
+    pub fn bpm_todo(&self, cache_prefix: &str, limit: i64) -> Result<Vec<(String, f64)>> {
+        let c = self.c();
+        let mut st = c.prepare(
+            "SELECT path, duration FROM library WHERE bpm IS NULL AND duration BETWEEN 60 AND 900
+             ORDER BY (substr(path, 1, length(?1)) = ?1) DESC, rowid LIMIT ?2",
+        )?;
+        let rows = st.query_map(params![cache_prefix, limit], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn set_bpm(&self, path: &str, bpm: f64) -> Result<()> {
+        self.c().execute("UPDATE library SET bpm = ?2 WHERE path = ?1", params![path, bpm])?;
+        Ok(())
+    }
+
+    /// How many library songs have a tempo, and how many could: (known, total).
+    pub fn tempo_stats(&self, cache_prefix: &str) -> Result<(i64, i64)> {
+        Ok(self.c().query_row(
+            "SELECT COALESCE(SUM(bpm > 0), 0), COUNT(*) FROM library
+             WHERE duration BETWEEN 60 AND 900 AND substr(path, 1, length(?1)) != ?1",
+            [cache_prefix],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?)
     }
 
     /// Queue a library song for the room, ready to play, but only if the room is still idle, so
@@ -607,11 +740,12 @@ impl Db {
         let tx = c.transaction()?;
         for e in entries {
             tx.execute(
-                "INSERT INTO library(path, mtime, artist, title, tn, duration, album, genre, year, v)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1)
+                "INSERT INTO library(path, mtime, artist, title, tn, duration, album, genre, year, bpm, language, v)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 2)
                  ON CONFLICT(path) DO UPDATE SET mtime = ?2, artist = ?3, title = ?4, tn = ?5, duration = ?6,
-                     album = ?7, genre = ?8, year = ?9, v = 1",
-                params![e.path, e.mtime, e.artist, e.title, e.tn, e.duration, e.album, e.genre, e.year],
+                     album = ?7, genre = ?8, year = ?9, language = ?11, v = 2,
+                     bpm = COALESCE(?10, CASE WHEN library.mtime = ?2 THEN library.bpm ELSE NULL END)",
+                params![e.path, e.mtime, e.artist, e.title, e.tn, e.duration, e.album, e.genre, e.year, e.bpm, e.language],
             )?;
         }
         tx.commit()?;
@@ -810,10 +944,16 @@ mod tests {
         let db = Db::memory().unwrap();
         db.create_room("r", "Office").unwrap();
         assert!(!db.room("r").unwrap().unwrap().autoplay);
-        db.set_room_flags("r", Some(true), None).unwrap();
-        db.set_room_flags("r", None, Some(true)).unwrap();
+        db.set_room_flags("r", Some(true), None, None).unwrap();
+        db.set_room_flags("r", None, Some(&MoodPatch { genre: Some(true), tempo: Some(true), ..Default::default() }), Some(Close::Tight))
+            .unwrap();
+        // A later change touches only what it names.
+        db.set_room_flags("r", None, Some(&MoodPatch { era: Some(true), tempo: Some(false), ..Default::default() }), None).unwrap();
         let room = db.room("r").unwrap().unwrap();
-        assert!(room.autoplay && room.mood);
+        assert!(room.autoplay && room.close == Close::Tight);
+        assert_eq!(room.mood, Mood { genre: true, era: true, ..Default::default() });
+        db.set_mood_note("r", "Rock").unwrap();
+        assert_eq!(db.room("r").unwrap().unwrap().mood_note, "Rock");
         let song =
             RadioSong { path: "/m/a.flac".into(), artist: "A, B".into(), title: "One".into(), duration: 200.0, ..Default::default() };
         assert!(db.idle("r").unwrap());
@@ -847,8 +987,40 @@ mod tests {
         add("/music/mix.flac", 3600.0);
         add("/data/songs/cached.m4a", 200.0);
         let songs = db.radio_songs("/data/songs/").unwrap();
-        assert_eq!(songs.len(), 1);
-        assert_eq!((songs[0].path.as_str(), songs[0].genre.as_deref()), ("/music/ok.flac", Some("Rock")));
+        assert_eq!(songs.len(), 2, "the song and the cached one; the jingle and the mix are too short or too long");
+        let library: Vec<_> = songs.iter().filter(|s| !s.cached).collect();
+        assert_eq!((library[0].path.as_str(), library[0].genre.as_deref()), ("/music/ok.flac", Some("Rock")));
+        assert!(songs.iter().any(|s| s.cached && s.path == "/data/songs/cached.m4a"));
+    }
+
+    #[test]
+    fn tempo_is_kept_until_the_file_changes_and_counted_for_the_library_only() {
+        let db = Db::memory().unwrap();
+        let entry = |path: &str, mtime: i64, bpm: Option<f64>| LibEntry {
+            path: path.into(),
+            mtime,
+            artist: "A".into(),
+            title: path.into(),
+            tn: path.into(),
+            duration: Some(200.0),
+            bpm,
+            ..Default::default()
+        };
+        db.lib_upsert(&entry("/music/a.flac", 1, None)).unwrap();
+        db.lib_upsert(&entry("/music/b.flac", 1, Some(128.0))).unwrap();
+        db.lib_upsert(&entry("/data/songs/c.m4a", 1, None)).unwrap();
+        // Cached songs are measured first; a song whose tag already has a tempo is not queued.
+        let todo = db.bpm_todo("/data/songs/", 10).unwrap();
+        assert_eq!(todo.iter().map(|t| t.0.as_str()).collect::<Vec<_>>(), ["/data/songs/c.m4a", "/music/a.flac"]);
+        db.set_bpm("/music/a.flac", 97.5).unwrap();
+        db.set_bpm("/data/songs/c.m4a", 0.0).unwrap(); // looked, no clear beat
+        assert!(db.bpm_todo("/data/songs/", 10).unwrap().is_empty());
+        assert_eq!(db.tempo_stats("/data/songs/").unwrap(), (2, 2));
+        // Re-scanning an unchanged file keeps the measured tempo; a changed file forgets it.
+        db.lib_upsert(&entry("/music/a.flac", 1, None)).unwrap();
+        assert_eq!(db.radio_songs("/data/songs/").unwrap().iter().find(|s| s.path == "/music/a.flac").unwrap().bpm, Some(97.5));
+        db.lib_upsert(&entry("/music/a.flac", 2, None)).unwrap();
+        assert_eq!(db.bpm_todo("/data/songs/", 10).unwrap().len(), 1);
     }
 
     #[test]

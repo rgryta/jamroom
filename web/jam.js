@@ -74,35 +74,105 @@ window.Jam = (() => {
     window.addEventListener('online', fn);
   };
 
-  // The Autoplay and "keep the mood" switches for one room. `onState` receives the room state the
-  // server answers with. `update(room)` shows what the server says, except just after a local change.
+  // What Autoplay can follow when it keeps the mood.
+  const FOLLOW = [
+    ['genre', 'Genre', 'Songs from the same genres'],
+    ['era', 'Era', 'Songs from the same years'],
+    ['artist', 'Artist', 'More from the same artists'],
+    ['language', 'Language', 'Songs in the same language'],
+    ['tempo', 'Tempo', 'Songs at a similar pace'],
+  ];
+  const CLOSE = [['loose', 'Loose'], ['balanced', 'Balanced'], ['tight', 'Tight']];
+
+  // The Autoplay switch and, while it is on, the mood panel for one room. `onState` receives the
+  // room state the server answers with. `update(room)` shows what the server says, except just
+  // after a local change.
   const switches = (api, onState) => {
     let touched = -Infinity;
-    const make = (label, hint) => {
-      const lab = el('label', 'switch');
-      const input = el('input');
-      input.type = 'checkbox';
-      input.setAttribute('role', 'switch');
-      const text = el('span', 'switch-text');
-      text.append(el('span', 'switch-label', label), el('span', 'switch-hint', hint));
-      lab.append(input, el('span', 'switch-track'), text);
-      return { lab, input };
-    };
-    const auto = make('Autoplay', 'When the queue is empty, keep playing songs from the library.');
-    const mood = make('Keep the mood', 'Pick songs like the ones that just played, not at random.');
-    const node = el('div', 'switches');
-    node.append(auto.lab, mood.lab);
     const send = (body) => {
       touched = performance.now();
-      api('/settings', 'POST', body).then(onState).catch(() => {});
+      return api('/settings', 'POST', body).then(onState).catch(() => {});
     };
-    auto.input.addEventListener('change', () => send({ autoplay: auto.input.checked }));
-    mood.input.addEventListener('change', () => send({ mood: mood.input.checked }));
+
+    const auto = el('label', 'switch');
+    const autoInput = el('input');
+    autoInput.type = 'checkbox';
+    autoInput.setAttribute('role', 'switch');
+    const autoText = el('span', 'switch-text');
+    autoText.append(el('span', 'switch-label', 'Autoplay'), el('span', 'switch-hint', 'When the queue is empty, keep playing songs from the library.'));
+    auto.append(autoInput, el('span', 'switch-track'), autoText);
+    autoInput.addEventListener('change', () => {
+      panel.hidden = !autoInput.checked;
+      send({ autoplay: autoInput.checked });
+    });
+
+    const panel = el('div', 'mood');
+    panel.hidden = true;
+    const title = el('p', 'mood-title', 'Keep the mood');
+    title.id = 'mood-title';
+    const hint = el('p', 'mood-hint', 'Pick songs like the ones that just played. Choose what to follow, or leave all off for a random mix.');
+    const chips = el('div', 'picks');
+    chips.setAttribute('role', 'group');
+    chips.setAttribute('aria-labelledby', 'mood-title');
+    const buttons = FOLLOW.map(([key, label, tip]) => {
+      const b = el('button', 'pick', label);
+      b.type = 'button';
+      b.title = tip;
+      b.setAttribute('aria-pressed', 'false');
+      b.addEventListener('click', () => {
+        const on = b.getAttribute('aria-pressed') !== 'true';
+        b.setAttribute('aria-pressed', String(on));
+        send({ mood: { [key]: on } });
+        refreshNote();
+      });
+      chips.append(b);
+      return [key, b];
+    });
+
+    const segment = el('div', 'segment');
+    segment.setAttribute('role', 'radiogroup');
+    segment.setAttribute('aria-label', 'How close to follow it');
+    const groupName = 'close-' + Math.random().toString(36).slice(2);
+    const radios = CLOSE.map(([value, label]) => {
+      const lab = el('label');
+      const input = el('input');
+      input.type = 'radio';
+      input.name = groupName;
+      input.value = value;
+      input.addEventListener('change', () => send({ close: value }));
+      lab.append(input, el('span', null, label));
+      segment.append(lab);
+      return [value, input];
+    });
+    const closeRow = el('div', 'close-row');
+    closeRow.append(el('span', 'mood-hint', 'How close'), segment);
+
+    const note = el('p', 'mood-note');
+    note.setAttribute('aria-live', 'polite');
+    const learning = el('p', 'mood-hint');
+    panel.append(title, hint, chips, closeRow, note, learning);
+
+    let current = null;
+    const refreshNote = () => {
+      const on = buttons.filter(([, b]) => b.getAttribute('aria-pressed') === 'true').length;
+      note.textContent = !on ? 'Random mix: any song from the library.' : current && current.mood_note ? 'Following: ' + current.mood_note : 'Following the next songs as they play…';
+    };
+
+    const node = el('div', 'switches');
+    node.append(auto, panel);
     const update = (room) => {
       if (!room || performance.now() - touched < 2500) return;
-      auto.input.checked = !!room.autoplay;
-      mood.input.checked = !!room.mood;
-      mood.lab.classList.toggle('dim', !room.autoplay);
+      current = room;
+      autoInput.checked = !!room.autoplay;
+      panel.hidden = !room.autoplay;
+      buttons.forEach(([key, b]) => b.setAttribute('aria-pressed', String(!!(room.mood && room.mood[key]))));
+      radios.forEach(([value, input]) => { input.checked = room.close === value; });
+      refreshNote();
+      const t = room.tempo;
+      learning.hidden = !(room.mood && room.mood.tempo && t && t.known < t.total);
+      if (!learning.hidden) {
+        learning.textContent = `Tempo is measured in the background: ${t.known.toLocaleString()} of ${t.total.toLocaleString()} songs so far. Songs without a measured tempo are skipped by this option.`;
+      }
     };
     return { node, update };
   };

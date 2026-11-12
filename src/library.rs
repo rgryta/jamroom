@@ -114,6 +114,11 @@ pub fn read_entry(path: &Path, root: &Path) -> Option<LibEntry> {
         duration: (duration > 0.0).then_some(duration),
         album: text(tag.and_then(|t| t.album())),
         genre: text(tag.and_then(|t| t.genre())),
+        bpm: tag
+            .and_then(|t| t.get_string(ItemKey::Bpm))
+            .and_then(|b| b.split_whitespace().next()?.parse::<f64>().ok())
+            .filter(|b| *b >= 40.0),
+        language: tag.and_then(|t| t.get_string(ItemKey::Language)).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
         year: tag
             .and_then(|t| t.get_string(ItemKey::Year).or_else(|| t.get_string(ItemKey::RecordingDate)))
             .and_then(|y| y.trim().get(..4)?.parse().ok()),
@@ -133,7 +138,7 @@ pub fn scan(db: &Db, roots: &[&Path]) -> Result<(usize, usize)> {
     let mut batch = Vec::new();
     for (p, root) in &files {
         let key = p.to_string_lossy();
-        if known.get(key.as_ref()).is_some_and(|(m, v)| *m == mtime(p) && *v >= 1) {
+        if known.get(key.as_ref()).is_some_and(|(m, v)| *m == mtime(p) && *v >= 2) {
             continue;
         }
         if let Some(e) = read_entry(p, root) {

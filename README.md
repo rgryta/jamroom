@@ -46,15 +46,26 @@ Downloads are about 128 kbps AAC, which is what YouTube serves.
 
 ## Autoplay
 
-Each room has two switches, on the add page and on the player (both off to start):
+Each room has an **Autoplay** switch, on the add page and on the player (off to start). When the
+queue is empty, it queues a song from the music library, so the room keeps playing like a radio.
+Library songs start at once at full quality and nothing is downloaded. Someone's own songs always
+go first. None of the room's last 60 plays comes round again, and the same artist is not picked
+within three songs. With nothing else switched on, the pick is random.
 
-* **Autoplay**: when the queue is empty, queue a song from the music library, so the room keeps
-  playing like a radio. Library songs start at once at full quality and nothing is downloaded.
-  Someone's own songs always go first. None of the room's last 60 plays comes round again, and
-  the same artist is not picked within three songs.
-* **Keep the mood**: instead of a random song, favour songs that share a genre or a decade with
-  the last five that played (genre and year come from the file tags; a YouTube song borrows the
-  tags of the same artist's library songs). With no clue it falls back to a random song.
+**Keep the mood** (shown while Autoplay is on) makes the pick follow what the last five songs were
+like. Choose what to follow, any number of them:
+
+* **Genre**, **Era** (the same decade, within about five years), **Language**, and **Artist** (more
+  of the same artists), from the file tags. A YouTube song borrows the tags of the same artist's
+  library songs.
+* **Tempo**: the same pace. Library files rarely have a BPM tag, so the Soulseek upgrader's
+  container measures each song in the background (30 seconds of audio through ffmpeg, then beat
+  detection), slowly and one song at a time. The panel shows how many songs are done; songs not
+  measured yet are skipped by this option.
+
+**How close** is Loose (a third of the picks ignore the mood), Balanced, or Tight (stay near the
+best few fits). A line under the options says what the radio is following right now, for example
+"Rock · 1990s · ~118 BPM".
 
 ## Playing in sync
 

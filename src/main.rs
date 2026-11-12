@@ -11,6 +11,7 @@ mod norm;
 mod radio;
 mod resolve;
 mod soulseek;
+mod tempo;
 mod web;
 mod ytdlp;
 
@@ -64,6 +65,8 @@ async fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("upgrade") {
         anyhow::ensure!(!cfg.slskd_url.is_empty(), "JAM_SLSKD_URL is not set");
         let db = Db::open(&cfg.data.join("jamroom.db"))?;
+        // Measuring the tempo of every song is slow background work, so it runs here, not in the public service.
+        tokio::spawn(tempo::run(Db::open(&cfg.data.join("jamroom.db"))?, format!("{}/", cfg.cache.display())));
         return tokio::select! {
             r = soulseek::run((*cfg).clone(), db) => r,
             _ = shutdown() => Ok(()),
