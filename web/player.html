@@ -217,7 +217,7 @@
     started = true; $('gate').hidden = true; $('deck').hidden = false;
     a.play().catch(() => {});   // unlocks sound for the rest of the session
     keepAwake();
-    poll(); setInterval(poll, 1500);
+    poll(); Jam.every(1500, poll); Jam.onWake(poll);
   });
 })();
 </script>

@@ -50,6 +50,10 @@ pub fn router(app: Arc<App>) -> Router {
             "/assets/jam.js",
             get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../web/jam.js")) }),
         )
+        .route(
+            "/assets/tick.js",
+            get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../web/tick.js")) }),
+        )
         .route("/admin", get(|| async { Html(include_str!("../web/admin.html")) }))
         .route("/r/{code}", get(room_page))
         .route("/r/{code}/player", get(player_page))
@@ -424,6 +428,7 @@ mod tests {
         assert_eq!(call(&r, "POST", "/api/r/nope/pause", false, None).await.0, StatusCode::NOT_FOUND);
         assert_eq!(call(&r, "GET", "/assets/jam.css", false, None).await.0, StatusCode::OK);
         assert_eq!(call(&r, "GET", "/assets/jam.js", false, None).await.0, StatusCode::OK);
+        assert_eq!(call(&r, "GET", "/assets/tick.js", false, None).await.0, StatusCode::OK);
     }
 
     #[tokio::test]

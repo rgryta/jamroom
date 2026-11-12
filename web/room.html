@@ -156,7 +156,7 @@
     $('add').disabled = false;
   });
 
-  load(); setInterval(load, 2000);
+  load(); Jam.every(2000, load); Jam.onWake(load);
 })();
 </script>
 </body>

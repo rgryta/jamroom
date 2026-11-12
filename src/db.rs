@@ -378,6 +378,13 @@ impl Db {
         Ok(())
     }
 
+    /// A consistent copy of the whole database (rooms and queue), safe to take while the service runs.
+    pub fn backup_to(&self, path: &Path) -> Result<()> {
+        let _ = std::fs::remove_file(path);
+        self.c().execute("VACUUM INTO ?1", [path.to_string_lossy().as_ref()])?;
+        Ok(())
+    }
+
     /// Run at startup: downloads cut off by a restart go back in line. The playing song stays as
     /// it is: its clock is wall time, so listeners carry on in the right place after a restart.
     pub fn reset_stale(&self) -> Result<()> {
@@ -531,6 +538,36 @@ mod tests {
         db.set_ready(a, "/x/one.m4a", false).unwrap();
         assert!(db.track_file("r1", a).unwrap().is_some());
         assert!(db.track_file("r2", a).unwrap().is_none());
+    }
+
+    #[test]
+    fn rooms_and_the_queue_survive_closing_and_reopening_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("jam.db");
+        {
+            let db = Db::open(&file).unwrap();
+            db.create_room("abc", "Office").unwrap();
+            db.add_track("abc", &track("one")).unwrap();
+            db.add_track("abc", &track("two")).unwrap();
+        }
+        let db = Db::open(&file).unwrap();
+        db.reset_stale().unwrap();
+        assert_eq!(db.room("abc").unwrap().unwrap().name, "Office");
+        assert_eq!(db.snapshot("abc").unwrap().queue.len(), 2);
+    }
+
+    #[test]
+    fn a_backup_is_a_complete_database_of_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("jam.db")).unwrap();
+        db.create_room("abc", "Office").unwrap();
+        db.add_track("abc", &track("one")).unwrap();
+        let copy = dir.path().join("backup.db");
+        db.backup_to(&copy).unwrap();
+        db.backup_to(&copy).unwrap(); // a second backup replaces the first
+        let restored = Db::open(&copy).unwrap();
+        assert!(restored.room("abc").unwrap().is_some());
+        assert_eq!(restored.snapshot("abc").unwrap().queue.len(), 1);
     }
 
     #[test]

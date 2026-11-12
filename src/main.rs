@@ -43,6 +43,12 @@ async fn shutdown() {
         _ = tokio::signal::ctrl_c() => {}
         _ = term.recv() => {}
     }
+    // An audio stream held open by a player would keep a graceful stop waiting for ever.
+    // The database is safe to cut off: SQLite recovers its log on the next start.
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        std::process::exit(0);
+    });
 }
 
 #[tokio::main]
@@ -93,6 +99,29 @@ async fn main() -> Result<()> {
                 Err(e) => tracing::warn!(error = %e, "yt-dlp update failed"),
             }
             tokio::time::sleep(Duration::from_secs(86_400)).await;
+        }
+    });
+
+    // The rooms and the queue are the one thing that cannot be rebuilt: keep a week of daily copies.
+    let saver = app.clone();
+    tokio::spawn(async move {
+        let dir = saver.cfg.data.join("backup");
+        let _ = std::fs::create_dir_all(&dir);
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            let day = db::now() / 86_400;
+            match saver.db.backup_to(&dir.join(format!("jamroom-{day}.db"))) {
+                Ok(()) => tracing::info!(day, "database backed up"),
+                Err(e) => tracing::warn!(error = %e, "database backup failed"),
+            }
+            for old in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                let name = old.file_name().to_string_lossy().into_owned();
+                let age = name.strip_prefix("jamroom-").and_then(|n| n.strip_suffix(".db")).and_then(|n| n.parse::<i64>().ok());
+                if age.is_some_and(|d| d + 7 < day) {
+                    let _ = std::fs::remove_file(old.path());
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(86_400 - 60)).await;
         }
     });
 

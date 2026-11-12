@@ -54,8 +54,28 @@ window.Jam = (() => {
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   };
 
+  // A repeating timer that keeps its pace in a hidden tab. Browsers slow page timers right down
+  // once a tab has been hidden for a few minutes (and a tab with nothing playing is not
+  // exempt), but a worker's timer is left alone. Falls back to a plain timer.
+  const every = (ms, fn) => {
+    try {
+      const w = new Worker('/assets/tick.js');
+      w.onmessage = fn;
+      w.postMessage(ms);
+    } catch (e) {
+      setInterval(fn, ms);
+    }
+  };
+
+  // Runs `fn` when the page comes back: tab shown again, phone unlocked, network restored.
+  const onWake = (fn) => {
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') fn(); });
+    window.addEventListener('pageshow', fn);
+    window.addEventListener('online', fn);
+  };
+
   const STATUS = { queued: 'Waiting', working: 'Fetching', ready: 'Ready', playing: 'Playing', played: 'Played', failed: 'Failed' };
   const chip = (t) => el('span', 'chip ' + (t.status === 'queued' ? '' : t.status), STATUS[t.status] || t.status);
 
-  return { el, sleeve, roomApi, clock, chip };
+  return { el, sleeve, roomApi, clock, chip, every, onWake };
 })();
