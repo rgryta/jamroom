@@ -1,0 +1,29 @@
+name: tag
+
+# A version bump in Cargo.toml on main tags that commit and starts the image build.
+on:
+  push:
+    branches: [main]
+    paths: [Cargo.toml]
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+            echo "$tag already exists"
+            exit 0
+          fi
+          gh api "repos/${{ github.repository }}/git/refs" -f ref="refs/tags/$tag" -f sha="$GITHUB_SHA"
+          # A tag made with GITHUB_TOKEN fires no push event, so start the build directly. It runs
+          # on main so its build cache lands where the next release can read it.
+          gh workflow run image.yml --ref main -f tag="$tag"

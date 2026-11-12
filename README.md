@@ -86,6 +86,13 @@ docker run -p 8080:8080 -v ./data:/data -v ~/Music:/music \
   -e JAM_ADMIN_TOKEN=change-me -e JAM_DEFAULT_ROOM=Office jamroom
 ```
 
+Or use the released image, `ghcr.io/rgryta/jamroom` (a version bump in `Cargo.toml` on `main` tags the commit and builds it):
+
+```sh
+docker run -p 8080:8080 -v ./data:/data -v ~/Music:/music \
+  -e JAM_ADMIN_TOKEN=change-me -e JAM_DEFAULT_ROOM=Office ghcr.io/rgryta/jamroom
+```
+
 The first start creates a room named by `JAM_DEFAULT_ROOM` and logs its code. More rooms come
 from `/admin` (needs `JAM_ADMIN_TOKEN`). `deploy/compose.yaml` is the homelab stack.
 
