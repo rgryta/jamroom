@@ -1,0 +1,54 @@
+services:
+  jamroom:
+    image: 172.20.0.52:5000/jamroom:latest
+    container_name: jamroom
+    restart: unless-stopped
+    # 3001:3000 owns the library files; group 950 owns its top-level folder and may write there.
+    user: "3001:3000"
+    group_add:
+      - "950"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - .env
+    environment:
+      TZ: Europe/Warsaw
+      RUST_LOG: info
+      JAM_DEFAULT_ROOM: Office
+    tmpfs:
+      - /tmp
+    volumes:
+      - jam-data:/data
+      - /mnt/archive/media/Music:/music
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 512M
+    networks:
+      - unsafe-network
+    labels:
+      - traefik.enable=true
+      - autoheal=true
+      - wud.watch=true
+      - wud.watch.digest=true
+      - traefik.http.routers.jamroom.rule=Host(`jam.gryta.eu`)
+      - traefik.http.routers.jamroom.entrypoints=websecure
+      - traefik.http.routers.jamroom.tls.certresolver=le
+      - traefik.http.routers.jamroom.middlewares=jamroom-per-ip
+      - traefik.http.middlewares.jamroom-per-ip.inFlightReq.amount=20
+      - traefik.http.middlewares.jamroom-per-ip.inFlightReq.sourceCriterion.ipStrategy.depth=0
+      - traefik.http.services.jamroom.loadbalancer.server.port=8080
+volumes:
+  jam-data:
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/quick/apps/volumes/jamroom
+networks:
+  unsafe-network:
+    name: unsafe-network
+    external: true

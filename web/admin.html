@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jam admin</title>
+<style>
+  :root { color-scheme: dark light; --bg:#14161a; --fg:#eceef2; --mut:#9aa3b2; --card:#1d2128; --acc:#6ea8fe; --line:#2c323c; --bad:#ff7b7b; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f6f7f9; --fg:#14161a; --mut:#5b6575; --card:#fff; --acc:#2563eb; --line:#d9dee6; --bad:#c0392b; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.4 system-ui, sans-serif; }
+  main { max-width:640px; margin:0 auto; padding:16px; }
+  h1 { font-size:1.4rem; margin:0 0 12px; } a { color:var(--acc); }
+  form { display:flex; gap:8px; margin-bottom:12px; }
+  input, button { font:inherit; padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--fg); min-width:0; }
+  input { flex:1; } button { cursor:pointer; } button.go { background:var(--acc); color:#fff; border:0; font-weight:600; }
+  ul { list-style:none; margin:0; padding:0; display:grid; gap:8px; }
+  li { display:flex; justify-content:space-between; align-items:center; gap:8px; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:10px 12px; }
+  .m { color:var(--mut); font-size:.85rem; } .rev { opacity:.5; } #msg { color:var(--bad); min-height:1.4em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Jam rooms</h1>
+  <form id="tok"><input id="token" type="password" placeholder="Admin token" autocomplete="off"><button>Unlock</button></form>
+  <p id="msg"></p>
+  <form id="new" hidden><input id="name" placeholder="New room name" maxlength="40" required><button class="go">Create</button></form>
+  <ul id="rooms"></ul>
+</main>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var token = '';
+  try { token = sessionStorage.getItem('jam-admin') || ''; } catch (e) {}
+  function api(path, method, body) {
+    return fetch('/api/admin' + path, { method: method || 'GET', headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { if (!r.ok) throw new Error(j.error || r.statusText); return j; }); });
+  }
+  function node(tag, text) { var n = document.createElement(tag); if (text != null) n.textContent = text; return n; }
+  function load() {
+    return api('/rooms').then(function (d) {
+      $('msg').textContent = ''; $('tok').hidden = true; $('new').hidden = false;
+      var ul = $('rooms'); ul.textContent = '';
+      d.rooms.forEach(function (r) {
+        var li = node('li'); if (r.revoked) li.className = 'rev';
+        var left = node('div'); left.appendChild(node('div', r.name));
+        var link = location.origin + '/r/' + r.code;
+        var m = node('div'); m.className = 'm';
+        if (r.revoked) m.textContent = 'revoked'; else { var a = node('a', link); a.href = link; m.appendChild(a); }
+        left.appendChild(m); li.appendChild(left);
+        if (!r.revoked) {
+          var b = node('button', 'Revoke');
+          b.addEventListener('click', function () { if (confirm('Revoke "' + r.name + '"? Its link stops working.')) api('/rooms/' + r.code, 'DELETE').then(load); });
+          li.appendChild(b);
+        }
+        ul.appendChild(li);
+      });
+      if (!d.rooms.length) ul.appendChild(node('li', 'No rooms yet.'));
+    }).catch(function (e) { $('msg').textContent = e.message; $('tok').hidden = false; $('new').hidden = true; });
+  }
+  $('tok').addEventListener('submit', function (e) { e.preventDefault(); token = $('token').value; try { sessionStorage.setItem('jam-admin', token); } catch (e2) {} load(); });
+  $('new').addEventListener('submit', function (e) { e.preventDefault(); api('/rooms', 'POST', { name: $('name').value }).then(function () { $('name').value = ''; return load(); }).catch(function (er) { $('msg').textContent = er.message; }); });
+  if (token) load();
+})();
+</script>
+</body>
+</html>

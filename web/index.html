@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jam</title>
+<style>
+  :root { color-scheme: dark light; --bg:#14161a; --fg:#eceef2; --mut:#9aa3b2; --card:#1d2128; --acc:#6ea8fe; --line:#2c323c; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f6f7f9; --fg:#14161a; --mut:#5b6575; --card:#fff; --acc:#2563eb; --line:#d9dee6; } }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--fg); font:16px/1.4 system-ui, sans-serif; padding:16px; }
+  main { width:100%; max-width:380px; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:24px; }
+  h1 { margin:0 0 4px; font-size:1.5rem; }
+  p { margin:0 0 16px; color:var(--mut); }
+  input, button { width:100%; font:inherit; padding:12px; border-radius:10px; border:1px solid var(--line); background:var(--bg); color:var(--fg); }
+  button { margin-top:10px; background:var(--acc); color:#fff; border:0; font-weight:600; cursor:pointer; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Jam</h1>
+  <p>Enter the room code to add songs to the queue.</p>
+  <form id="f">
+    <input id="code" placeholder="Room code" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+    <button>Join</button>
+  </form>
+</main>
+<script>
+  document.getElementById('f').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var c = document.getElementById('code').value.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (c) location.href = '/r/' + c;
+  });
+</script>
+</body>
+</html>

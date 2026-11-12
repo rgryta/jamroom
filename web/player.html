@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jam player</title>
+<style>
+  :root { color-scheme: dark light; --bg:#0f1115; --fg:#eceef2; --mut:#9aa3b2; --card:#1d2128; --acc:#6ea8fe; --line:#2c323c; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f6f7f9; --fg:#14161a; --mut:#5b6575; --card:#fff; --acc:#2563eb; --line:#d9dee6; } }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; background:var(--bg); color:var(--fg); font:16px/1.4 system-ui, sans-serif; display:grid; place-items:center; padding:16px; text-align:center; }
+  main { width:100%; max-width:560px; }
+  #start { font:inherit; font-size:1.2rem; font-weight:600; padding:18px 32px; border:0; border-radius:14px; background:var(--acc); color:#fff; cursor:pointer; }
+  #cover { width:min(60vw, 280px); aspect-ratio:1; border-radius:14px; background:var(--line); object-fit:cover; margin:0 auto 16px; display:block; }
+  h1 { margin:0; font-size:1.5rem; } .artist { color:var(--mut); margin:4px 0 16px; }
+  audio { width:100%; margin:8px 0 16px; }
+  .next { color:var(--mut); font-size:.9rem; } .join { margin-top:20px; color:var(--mut); font-size:.9rem; }
+  a { color:var(--acc); }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <button id="start">Start the player</button>
+  <section id="deck" hidden>
+    <img id="cover" alt="" hidden>
+    <h1 id="title">Waiting for songs</h1>
+    <div class="artist" id="artist"></div>
+    <audio id="a" controls></audio>
+    <div class="next" id="next"></div>
+    <div class="join">Add songs at <a id="join" href="#"></a></div>
+  </section>
+</main>
+<script>
+(function () {
+  var code = location.pathname.split('/')[2];
+  var $ = function (id) { return document.getElementById(id); };
+  var a = $('a'), started = false, cur = null, busy = false;
+  var room = location.origin + '/r/' + code;
+  $('join').href = room; $('join').textContent = room.replace(/^https?:\/\//, '');
+
+  function api(path, method) {
+    return fetch('/api/r/' + code + path, { method: method || 'GET' }).then(function (r) {
+      if (!r.ok) throw new Error(r.statusText);
+      return r.json();
+    });
+  }
+  function show(s) {
+    var now = s.now;
+    if (now) {
+      if (now.id !== cur) {
+        cur = now.id;
+        a.src = '/media/' + code + '/' + now.id;
+        if (started) a.play().catch(function () {});
+        if ('mediaSession' in navigator) navigator.mediaSession.metadata = new MediaMetadata({ title: now.title, artist: now.artist, album: now.album || '' });
+      }
+      $('title').textContent = now.title;
+      $('artist').textContent = now.artist + (now.added_by ? ' · added by ' + now.added_by : '');
+      if (now.cover) { $('cover').src = now.cover; $('cover').hidden = false; } else $('cover').hidden = true;
+    } else {
+      if (cur !== null) { cur = null; a.pause(); a.removeAttribute('src'); a.load(); }
+      $('title').textContent = s.queue.length ? 'Getting the next song ready…' : 'Waiting for songs';
+      $('artist').textContent = ''; $('cover').hidden = true;
+    }
+    var up = s.queue.filter(function (t) { return !now || t.id !== now.id; });
+    $('next').textContent = up.length ? 'Up next: ' + up[0].title + (up.length > 1 ? ' (+' + (up.length - 1) + ' more)' : '') : '';
+  }
+  function tick() {
+    if (busy) return; busy = true;
+    api('/state').then(function (s) { return !s.now && s.queue.length ? api('/advance', 'POST') : s; })
+      .then(show).catch(function () {}).then(function () { busy = false; });
+  }
+  function advance() { return api('/next', 'POST').then(show).catch(function () {}); }
+  a.addEventListener('ended', advance);
+  a.addEventListener('error', function () { if (cur !== null) setTimeout(advance, 1500); });
+
+  $('start').addEventListener('click', function () {
+    started = true; $('start').hidden = true; $('deck').hidden = false;
+    a.play().catch(function () {});   // unlocks audio for the rest of the session
+    tick(); setInterval(tick, 2000);
+  });
+})();
+</script>
+</body>
+</html>

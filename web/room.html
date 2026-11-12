@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jam</title>
+<style>
+  :root { color-scheme: dark light; --bg:#14161a; --fg:#eceef2; --mut:#9aa3b2; --card:#1d2128; --acc:#6ea8fe; --line:#2c323c; --bad:#ff7b7b; --ok:#6bd68b; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f6f7f9; --fg:#14161a; --mut:#5b6575; --card:#fff; --acc:#2563eb; --line:#d9dee6; --bad:#c0392b; --ok:#1f8a4c; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.4 system-ui, sans-serif; }
+  main { max-width:640px; margin:0 auto; padding:16px; }
+  header { display:flex; justify-content:space-between; align-items:baseline; gap:12px; margin-bottom:12px; }
+  h1 { margin:0; font-size:1.4rem; } h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em; color:var(--mut); margin:24px 0 8px; }
+  a { color:var(--acc); }
+  form { display:grid; gap:8px; }
+  .row { display:grid; grid-template-columns:1fr 130px; gap:8px; }
+  input, button { font:inherit; padding:12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--fg); min-width:0; }
+  button.go { background:var(--acc); color:#fff; border:0; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.6; }
+  #msg { min-height:1.4em; margin:8px 0 0; color:var(--mut); } #msg.err { color:var(--bad); } #msg.ok { color:var(--ok); }
+  ul, ol { list-style:none; margin:0; padding:0; display:grid; gap:8px; }
+  li { display:grid; grid-template-columns:48px 1fr auto; gap:12px; align-items:center; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:8px 12px 8px 8px; }
+  .art { width:48px; height:48px; border-radius:8px; background:var(--line); object-fit:cover; }
+  .t { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .s { color:var(--mut); font-size:.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .now { border-color:var(--acc); }
+  .x { padding:6px 10px; cursor:pointer; line-height:1; }
+  .chip { font-size:.75rem; color:var(--mut); }
+  .empty { color:var(--mut); }
+</style>
+</head>
+<body>
+<main>
+  <header><h1 id="room">Jam</h1><a id="player" href="#">Open the player</a></header>
+  <form id="f">
+    <input id="in" placeholder="Paste a YouTube, SoundCloud, Spotify or Tidal link, or type a song" autocomplete="off" required>
+    <div class="row"><input id="nm" placeholder="Your name (optional)" maxlength="40" autocomplete="off"><button class="go" id="add">Add</button></div>
+  </form>
+  <p id="msg" role="status"></p>
+  <h2>Now playing</h2><ul id="now"></ul>
+  <h2>Up next</h2><ol id="q"></ol>
+  <h2>Recently</h2><ul id="recent"></ul>
+</main>
+<script>
+(function () {
+  var code = location.pathname.split('/')[2];
+  var $ = function (id) { return document.getElementById(id); };
+  $('player').href = '/r/' + code + '/player';
+  try { $('nm').value = localStorage.getItem('jam-name') || ''; } catch (e) {}
+
+  function api(path, opts) {
+    return fetch('/api/r/' + code + path, opts).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) throw new Error(j.error || r.statusText);
+        return j;
+      });
+    });
+  }
+  function say(text, cls) { $('msg').textContent = text; $('msg').className = cls || ''; }
+  function node(tag, cls, text) { var n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
+
+  var LABEL = { queued: 'waiting', working: 'fetching…', ready: 'ready', playing: 'playing', played: 'played', failed: 'failed' };
+  function item(t, canRemove, cls) {
+    var li = node('li', cls);
+    var art = node('img', 'art'); art.alt = ''; if (t.cover) art.src = t.cover; else art.style.visibility = 'hidden';
+    var mid = node('div'); mid.appendChild(node('div', 't', t.title));
+    var who = [t.artist, t.added_by ? 'added by ' + t.added_by : ''].filter(Boolean).join(' · ');
+    mid.appendChild(node('div', 's', who));
+    var chip = t.status === 'failed' ? (t.error || 'failed') : LABEL[t.status] || t.status;
+    mid.appendChild(node('div', 'chip', chip));
+    li.appendChild(art); li.appendChild(mid);
+    if (canRemove) {
+      var b = node('button', 'x', t.status === 'playing' ? 'Skip' : '✕'); b.title = t.status === 'playing' ? 'Skip' : 'Remove';
+      b.addEventListener('click', function () { api('/remove/' + t.id, { method: 'POST' }).then(render).catch(function (e) { say(e.message, 'err'); }); });
+      li.appendChild(b);
+    } else li.appendChild(node('span'));
+    return li;
+  }
+  function fill(list, items, empty, canRemove, cls) {
+    list.textContent = '';
+    if (!items.length) { var li = node('li', 'empty', empty); li.style.display = 'block'; list.appendChild(li); return; }
+    items.forEach(function (t) { list.appendChild(item(t, canRemove, cls)); });
+  }
+  function render(s) {
+    $('room').textContent = s.room.name; document.title = s.room.name + ' · Jam';
+    fill($('now'), s.now ? [s.now] : [], 'Nothing playing. Open the player on the laptop that has the speakers.', true, 'now');
+    fill($('q'), s.queue, 'The queue is empty.', true);
+    fill($('recent'), s.recent, 'Nothing yet.', false);
+  }
+  function load() { return api('/state').then(render).catch(function (e) { say(e.message, 'err'); }); }
+
+  $('f').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var name = $('nm').value.trim();
+    try { localStorage.setItem('jam-name', name); } catch (e2) {}
+    $('add').disabled = true; say('Looking that up…');
+    api('/add', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ input: $('in').value, name: name }) })
+      .then(function (r) { say(r.added === 1 ? 'Added "' + r.first + '".' : 'Added ' + r.added + ' songs.', 'ok'); $('in').value = ''; return load(); })
+      .catch(function (err) { say(err.message, 'err'); })
+      .then(function () { $('add').disabled = false; });
+  });
+  load(); setInterval(load, 2000);
+})();
+</script>
+</body>
+</html>
