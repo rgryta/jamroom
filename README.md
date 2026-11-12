@@ -108,7 +108,7 @@ from `/admin` (needs `JAM_ADMIN_TOKEN`). `deploy/compose.yaml` is the homelab st
 | `JAM_SLSKD_URL` | empty | slskd address; only the upgrader uses it |
 | `JAM_SLSK_DOWNLOADS` | `/slsk` | slskd's finished-downloads folder, as the upgrader sees it |
 | `JAM_ADMIN_TOKEN` | empty | enables the admin API when set |
-| `JAM_PYTHON` | `python3` | interpreter that runs the yt-dlp script (the data volume need not allow execution) |
+| `JAM_PYTHON` | `python3` | interpreter that runs a yt-dlp script; empty runs yt-dlp as a standalone program (the image sets it empty) |
 | `JAM_MAX_SECONDS` | `900` | longest track that is downloaded |
 | `JAM_CONCURRENCY` | `2` | parallel downloads |
 | `JAM_MAX_QUEUE` | `50` | tracks waiting per room |
@@ -127,7 +127,10 @@ The service downloads on behalf of anyone who has a room code, so:
   revoked in `/admin`;
 - per-room queue limit, per-client add limit, track length and file size limits, and a daily cap
   on new library files;
-- the container runs as an unprivileged user with a read-only root and no capabilities.
+- the image is built `FROM scratch`: the jamroom binary, a standalone yt-dlp, a static ffmpeg and the
+  CA certificates, with no shell or package manager. It runs as an unprivileged user, and the
+  compose file gives it a read-only root and no capabilities. The data volume must allow running
+  programs, because yt-dlp keeps its self-updating copy there.
 
 Cached tracks are copied from services whose terms do not allow downloading. Use this for your own
 library and your own office.
@@ -135,7 +138,7 @@ library and your own office.
 ## Development
 
 ```sh
-cargo test          # 34 tests, no network needed
+cargo test          # 72 tests, no network needed
 cargo clippy --all-targets -- -D warnings
 ```
 

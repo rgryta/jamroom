@@ -23,17 +23,30 @@ COPY src ./src
 COPY web ./web
 RUN cargo build --release --locked
 
-# Runtime: yt-dlp needs python, and ffmpeg repairs the DASH audio it downloads.
-FROM alpine:3.22
-RUN apk add --no-cache python3 ffmpeg ca-certificates tzdata \
- && wget -qO /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
- && chmod 755 /usr/local/bin/yt-dlp
+# The files the runtime image needs besides the program: certificates, the C library and zlib the
+# standalone yt-dlp is linked against, and an empty /tmp.
+FROM alpine:3.22 AS rootfs
+RUN apk add --no-cache ca-certificates \
+ && mkdir -p /rootfs/etc/ssl/certs /rootfs/usr/local/bin /rootfs/lib /rootfs/tmp \
+ && chmod 1777 /rootfs/tmp \
+ && cp /etc/ssl/certs/ca-certificates.crt /rootfs/etc/ssl/certs/ \
+ && cp -a /lib/ld-musl-*.so.1 /lib/libc.musl-*.so.1 /usr/lib/libz.so.1* /rootfs/lib/ \
+ && wget -qO /rootfs/usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_musllinux \
+ && chmod 755 /rootfs/usr/local/bin/yt-dlp
+
+# Runtime: nothing but the program, yt-dlp (standalone, python bundled) and a static ffmpeg, which
+# repairs the DASH audio yt-dlp downloads and measures tempo. No shell, no package manager.
+FROM scratch
+COPY --from=rootfs /rootfs/ /
+COPY --from=mwader/static-ffmpeg:7.1.1 /ffmpeg /usr/local/bin/ffmpeg
 COPY --from=test /tested /usr/local/share/tested
 COPY --from=build /src/target/release/jamroom /usr/local/bin/jamroom
 
 # 3001:3000 owns the music library on the NAS; compose can override this.
 USER 3001:3000
-ENV JAM_DATA=/data JAM_LIBRARY=/music
+# yt-dlp copies itself into the data volume so it can update itself there; an old script copy
+# from the python image is left alone. JAM_PYTHON is empty because yt-dlp runs by itself.
+ENV PATH=/usr/local/bin JAM_DATA=/data JAM_LIBRARY=/music JAM_PYTHON= JAM_YTDLP=/data/bin/yt-dlp-standalone
 EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s CMD ["/usr/local/bin/jamroom", "healthcheck"]
 ENTRYPOINT ["/usr/local/bin/jamroom"]

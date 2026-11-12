@@ -8,11 +8,20 @@ use std::{process::Stdio, time::Duration};
 use tokio::process::Command;
 
 fn base(cfg: &Config) -> Command {
-    let mut c = Command::new(&cfg.python);
-    c.arg(&cfg.ytdlp);
+    // With no interpreter set, yt-dlp is a standalone program and runs by itself.
+    let mut c = if cfg.python.is_empty() {
+        Command::new(&cfg.ytdlp)
+    } else {
+        let mut c = Command::new(&cfg.python);
+        c.arg(&cfg.ytdlp);
+        c
+    };
     c.args(["--ignore-config", "--no-warnings", "--no-colors"])
         .env("XDG_CACHE_HOME", cfg.data.join("cache"))
         .env("HOME", &cfg.data)
+        // The standalone build unpacks itself here, and /tmp may not allow running programs. The
+        // folder is emptied at every start.
+        .env("TMPDIR", cfg.data.join("tmp"))
         .stdin(Stdio::null())
         .kill_on_drop(true);
     c

@@ -21,7 +21,7 @@ pub struct Config {
     pub admin_token: String,
     /// yt-dlp binary used for downloads.
     pub ytdlp: PathBuf,
-    /// Interpreter that runs the yt-dlp script, so the data volume does not need to allow execution.
+    /// Interpreter that runs the yt-dlp script. Empty: yt-dlp is a standalone program and runs by itself.
     pub python: String,
     pub max_seconds: u32,
     pub concurrency: usize,

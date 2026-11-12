@@ -54,8 +54,31 @@ async fn shutdown() {
     });
 }
 
+/// `jamroom healthcheck`: ask this server's own /healthz, for container health checks. The image
+/// has no shell or wget. Exit status 0 when it answers 200.
+fn healthcheck() -> ! {
+    use std::io::{Read, Write};
+    let port = Config::from_env().addr.rsplit(':').next().unwrap_or("8080").to_string();
+    let ok = (|| -> std::io::Result<bool> {
+        let mut s = std::net::TcpStream::connect_timeout(
+            &format!("127.0.0.1:{port}").parse().map_err(std::io::Error::other)?,
+            Duration::from_secs(3),
+        )?;
+        s.set_read_timeout(Some(Duration::from_secs(3)))?;
+        s.write_all(b"GET /healthz HTTP/1.0\r\nHost: localhost\r\n\r\n")?;
+        let mut head = String::new();
+        s.take(64).read_to_string(&mut head)?;
+        Ok(head.starts_with("HTTP/1.0 200") || head.starts_with("HTTP/1.1 200"))
+    })()
+    .unwrap_or(false);
+    std::process::exit(if ok { 0 } else { 1 });
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("healthcheck") {
+        healthcheck();
+    }
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
