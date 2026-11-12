@@ -7,85 +7,103 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2317173a'/%3E%3Crect x='6' y='13' width='20' height='8' rx='2' fill='%23ffd23f'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/assets/jam.css">
 <style>
-  .stage { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
-  .gate { max-width: 520px; }
-  .gate p { color: var(--mut); margin: 0 0 24px; max-width: 46ch; }
-  .gate .row { display: flex; flex-wrap: wrap; gap: 12px; }
-  .roomrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
-  .roomrow .room { margin: 0; }
-  .deck { width: min(1120px, 100%); display: grid; gap: 28px; grid-template-columns: minmax(0, 1fr); }
-  @media (min-width: 860px) { .deck { grid-template-columns: minmax(300px, 440px) minmax(0, 1fr); gap: 48px; align-items: center; } }
-  .art .sleeve { width: 100%; border-radius: 20px; box-shadow: 0 24px 60px -24px rgba(23, 23, 58, .5); }
-  .room { color: var(--mut); font-weight: 600; margin: 0 0 6px; }
-  .now-title { font: 800 clamp(2rem, 5.5vw, 4.25rem)/1.15 var(--display); letter-spacing: -.035em; margin: 0 0 10px; overflow-wrap: anywhere; }
-  .artist { font-size: clamp(1.125rem, 2.2vw, 1.5rem); color: var(--mut); margin: 0; }
-  .by { color: var(--mut); font-size: .9375rem; margin: 4px 0 0; }
-  .transport { display: flex; gap: 12px; align-items: center; margin: 24px 0 12px; flex-wrap: wrap; }
-  .seek { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; font-variant-numeric: tabular-nums; color: var(--mut); }
-  .seek input { width: 100%; accent-color: var(--act); height: 28px; }
-  .status { min-height: 1.5em; margin: 8px 0 0; color: var(--mut); font-weight: 600; }
+  /* The player is sized from the screen, so it fits without scrolling. Everything is in rem, so a
+     TV or projector (the root size grows above 1700 px wide) scales it all together. */
+  .stage { min-height: 100dvh; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr auto; gap: clamp(8px, 2vh, 24px); padding: clamp(12px, 2.5vh, 28px) clamp(16px, 3vw, 40px); }
+  .stage.gate { grid-template-rows: 1fr; place-items: center; }
+  .gate-box { max-width: 24rem; }
+  .gate-box p { margin: 8px 0 20px; color: var(--mut); }
+  .gate-box .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+  .deck-top { display: flex; align-items: center; gap: 4px; }
+  .deck-top .room { color: var(--mut); font-weight: 600; margin-right: 4px; }
+  .nowp { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: clamp(20px, 4vw, 56px); min-height: 0; }
+  .nowp > * { min-width: 0; }
+  .art .sleeve { width: min(44vh, 34vw, 26rem); border-radius: 14px; }
+  .np-title { margin: 0 0 6px; font: 700 clamp(1.5rem, 1rem + 2.4vw, 2.75rem)/1.12 var(--display); letter-spacing: -.02em; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .np-artist { margin: 0; font-size: var(--t4); color: var(--mut); }
+  .np-artist small { font-size: var(--t2); }
+  .seek { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; margin: clamp(12px, 3vh, 28px) 0 8px; font-size: var(--t2); color: var(--mut); font-variant-numeric: tabular-nums; }
+  .seek input { width: 100%; height: 24px; accent-color: var(--ink); }
+  .transport { display: flex; align-items: center; gap: 12px; }
+  .status { min-height: 1.3em; margin: 8px 0 0; color: var(--mut); font-size: var(--t2); font-weight: 600; }
   .status.err { color: var(--bad); }
-  .upnext .track { grid-template-columns: 48px minmax(0, 1fr) auto; }
-  .join { margin-top: 28px; color: var(--mut); display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
-  .join a { font-weight: 700; word-break: break-all; }
+  .next { display: flex; align-items: center; gap: 16px; min-height: 0; border-top: 1px solid var(--line); padding-top: clamp(8px, 1.5vh, 16px); }
+  .next .label { color: var(--mut); font-size: var(--t2); font-weight: 600; white-space: nowrap; }
+  .strip { list-style: none; margin: 0; padding: 0; display: flex; gap: 20px; flex: 1; min-width: 0; overflow: hidden; }
+  .strip li { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 0 1 16rem; }
+  .strip .sleeve { width: 36px; border-radius: 6px; }
+  .strip .t { font-size: var(--t2); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .strip .s { font-size: var(--t1); color: var(--mut); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .strip .none { color: var(--mut); font-size: var(--t2); }
+  @media (max-width: 719px) {
+    .nowp { grid-template-columns: 1fr; align-content: center; gap: 16px; }
+    .art .sleeve { width: min(62vw, 34vh); }
+    .strip li:nth-child(n+3) { display: none; }
+  }
+  @media (max-height: 520px) { .next { display: none; } }
 </style>
 </head>
 <body>
-<main class="stage">
-  <section class="gate" id="gate">
+<section class="stage gate" id="gate">
+  <div class="gate-box">
     <h1>Start the player</h1>
-    <p>Press once so this tab is allowed to play sound, then leave it open on the computer that&rsquo;s connected to the speakers. The screen stays awake while it plays. Every player in the room stays in time with the others.</p>
-    <div class="row">
-      <button class="btn big" id="start">Start player</button>
-      <a class="btn ghost big" id="gate-room" href="#">Just add songs instead</a>
+    <p>Plays here, in time with every other player in the room.</p>
+    <div class="buttons">
+      <button class="btn" id="start">Start player</button>
+      <a class="btn quiet" id="gate-room" href="#">Add songs instead</a>
     </div>
-  </section>
+  </div>
+</section>
 
-  <section class="deck" id="deck" hidden>
+<section class="stage" id="deck" hidden>
+  <header class="deck-top">
+    <span class="room" id="roomname"></span>
+    <span class="grow"></span>
+    <a class="icon-btn" id="to-room" href="#" aria-label="Add songs" title="Add songs"></a>
+    <button class="icon-btn" id="copy" type="button" aria-label="Copy the room link" title="Copy the room link"></button>
+    <span id="radio"></span>
+  </header>
+
+  <main class="nowp">
     <div class="art" id="art"></div>
     <div>
-      <div class="roomrow">
-        <p class="room" id="roomname"></p>
-        <a class="btn ghost sm" id="to-room" href="#">Add songs</a>
-      </div>
-      <h1 class="now-title"><mark class="hl" id="tt"></mark><span id="idle"></span></h1>
-      <p class="artist" id="artist"></p>
-      <p class="by" id="by"></p>
-
-      <div class="transport">
-        <button class="btn big" id="pp" disabled>Pause</button>
-        <button class="btn ghost big" id="skip" disabled>Skip</button>
-        <button class="btn ghost big" id="tap" hidden>Tap to hear it</button>
-      </div>
+      <h1 class="np-title"><mark class="hl" id="tt"></mark><span id="idle"></span></h1>
+      <p class="np-artist" id="artist"></p>
       <div class="seek">
         <span id="t0">0:00</span>
         <input type="range" id="seek" min="0" max="1000" value="0" aria-label="Seek" disabled>
         <span id="t1">0:00</span>
       </div>
-      <p class="status" id="net" role="status" aria-live="polite"></p>
-
-      <div id="sw"></div>
-
-      <div class="upnext">
-        <h2>Up next</h2>
-        <ol class="list" id="next"></ol>
+      <div class="transport">
+        <button class="icon-btn main" id="pp" type="button" aria-label="Pause" disabled></button>
+        <button class="icon-btn" id="skip" type="button" aria-label="Skip" title="Skip" disabled></button>
+        <button class="btn sm" id="tap" type="button" hidden>Tap to hear it</button>
       </div>
-      <p class="join">Add songs at <a id="join" href="#"></a> <button class="btn ghost sm" id="copy" type="button">Copy link</button></p>
+      <p class="status" id="net" role="status" aria-live="polite"></p>
     </div>
-  </section>
-</main>
+  </main>
+
+  <footer class="next">
+    <span class="label">Up next</span>
+    <ol class="strip" id="next"></ol>
+  </footer>
+</section>
 <audio id="a" preload="auto"></audio>
 <script src="/assets/jam.js"></script>
 <script>
 (() => {
-  const { el, sleeve, roomApi, clock, chip } = Jam;
+  const { el, sleeve, roomApi, clock, icon, setIcon } = Jam;
   const code = location.pathname.split('/')[2];
   const api = roomApi(code);
   const $ = (id) => document.getElementById(id);
   const a = $('a');
   const room = `${location.origin}/r/${code}`;
-  $('gate-room').href = `/r/${code}`; $('to-room').href = `/r/${code}`;
-  $('join').href = room; $('join').textContent = room.replace(/^https?:\/\//, '');
+  $('gate-room').href = `/r/${code}`;
+  $('to-room').href = `/r/${code}`;
+  $('to-room').append(icon('plus'));
+  $('copy').append(icon('copy'));
+  setIcon($('pp'), 'pause');
+  setIcon($('skip'), 'skip');
 
   let remembered = null;
   // Opening the player counts as joining the room, even before Start is pressed.
@@ -108,22 +126,22 @@
   };
 
   const upNext = (s) => {
-    const list = $('next'); list.textContent = '';
+    const list = $('next');
+    list.textContent = '';
     const up = s.queue.filter((t) => !s.now || t.id !== s.now.id);
-    if (!up.length) { list.append(el('li', 'empty', s.room.autoplay ? 'Nothing queued. Autoplay picks the next song.' : 'Nothing queued. Add a song from your phone.')); return; }
-    up.slice(0, 5).forEach((t) => {
-      const li = el('li', 'track');
-      const mid = el('div');
-      mid.append(el('div', 'title', t.title), el('div', 'sub', t.artist));
-      li.append(sleeve(t), mid, chip(t));
+    if (!up.length) { list.append(el('li', 'none', s.room.autoplay ? 'Autoplay picks the next song' : 'Nothing queued')); return; }
+    up.slice(0, 4).forEach((t) => {
+      const li = el('li');
+      const text = el('div');
+      text.style.minWidth = '0';
+      text.append(el('div', 't', t.title), el('div', 's', t.artist));
+      li.append(sleeve(t), text);
       list.append(li);
     });
-    if (up.length > 5) list.append(el('li', 'sub', `and ${up.length - 5} more`));
   };
 
   const show = (s, delay) => {
-    sw.update(s.room);
-    if (remembered !== s.room.name) { Jam.rooms.remember(code, s.room.name); remembered = s.room.name; }
+    rd.update(s.room);
     const now = s.now;
     sync = now && { id: now.id, pos: now.position + (now.paused ? 0 : delay), at: performance.now(), paused: now.paused, dur: now.duration };
     if (now && now.id !== cur) {
@@ -138,6 +156,7 @@
     } else if (!now && cur !== null) {
       cur = null; a.pause(); a.removeAttribute('src'); a.load();
     }
+    if (remembered !== s.room.name) { Jam.rooms.remember(code, s.room.name); remembered = s.room.name; }
     const key = JSON.stringify({ r: s.room, n: now && { ...now, position: 0 }, q: s.queue.map((t) => [t.id, t.status]) });
     if (key !== last) {
       last = key;
@@ -145,15 +164,20 @@
       document.title = now ? `${now.title} · jamroom` : 'jamroom player';
       $('tt').textContent = now ? now.title : '';
       $('idle').textContent = now ? '' : s.queue.length ? 'Getting the next song ready…' : s.room.autoplay ? 'Picking the next song…' : 'Waiting for songs';
-      $('artist').textContent = now ? now.artist : '';
-      $('by').textContent = now && now.added_by ? `added by ${now.added_by}` : '';
+      $('artist').textContent = '';
+      if (now) {
+        $('artist').append(document.createTextNode(now.artist));
+        if (now.added_by) $('artist').append(el('small', null, `  ·  added by ${now.added_by}`));
+      }
       $('art').textContent = '';
       $('art').append(sleeve(now || { title: 'jamroom', artist: '' }));
       upNext(s);
     }
+    const paused = !!(now && now.paused);
     $('pp').disabled = $('skip').disabled = $('seek').disabled = !now;
-    $('pp').textContent = now && now.paused ? 'Play' : 'Pause';
-    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = !now ? 'none' : now.paused ? 'paused' : 'playing';
+    setIcon($('pp'), paused ? 'play' : 'pause');
+    $('pp').setAttribute('aria-label', paused ? 'Play' : 'Pause');
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = !now ? 'none' : paused ? 'paused' : 'playing';
     follow();
   };
 
@@ -169,7 +193,7 @@
       show(s, (performance.now() - t0) / 2000);
       return s;
     } catch (e) {
-      say('Can’t reach the server. Playing on and catching up when it’s back.', true);
+      say('Can’t reach the server. Playing on.', true);
       recovering = true;
     }
   };
@@ -179,8 +203,8 @@
     if (s && !s.now && (s.queue.length || s.room.autoplay)) await run('/advance', 'POST');
   };
 
-  const sw = Jam.switches(api, (s) => show(s, 0));
-  $('sw').append(sw.node);
+  const rd = Jam.radio(api, (s) => show(s, 0));
+  $('radio').append(rd.button);
 
   const skip = () => { if (cur !== null) run(`/next?done=${cur}`, 'POST'); };
   const toggle = () => { if (sync) run(sync.paused ? '/resume' : '/pause', 'POST'); };
@@ -215,10 +239,13 @@
   $('skip').addEventListener('click', skip);
   $('tap').addEventListener('click', follow);
   $('copy').addEventListener('click', () => {
-    navigator.clipboard.writeText(room).then(() => { $('copy').textContent = 'Copied'; setTimeout(() => { $('copy').textContent = 'Copy link'; }, 2000); }).catch(() => {});
+    navigator.clipboard.writeText(room).then(() => {
+      $('copy').title = 'Copied';
+      setTimeout(() => { $('copy').title = 'Copy the room link'; }, 2000);
+    }).catch(() => {});
   });
   document.addEventListener('keydown', (e) => {
-    if (e.code === 'Space' && started && !/^(INPUT|BUTTON|A)$/.test(document.activeElement.tagName)) { e.preventDefault(); toggle(); }
+    if (e.code === 'Space' && started && !/^(INPUT|BUTTON|A|DIALOG)$/.test(document.activeElement.tagName) && !document.querySelector('dialog[open]')) { e.preventDefault(); toggle(); }
   });
 
   // Keeps the screen (and so the computer) awake; the browser drops the lock when the tab is hidden.

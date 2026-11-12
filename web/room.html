@@ -6,39 +6,34 @@
 <title>jamroom</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2317173a'/%3E%3Crect x='6' y='13' width='20' height='8' rx='2' fill='%23ffd23f'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/assets/jam.css">
+<style>
+  .title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 0 0; }
+  .title-row h1 { overflow-wrap: anywhere; }
+</style>
 </head>
 <body>
 <header class="top">
   <a class="mark" href="/">jam<mark class="hl">room</mark></a>
-  <a class="btn ghost sm" id="player" href="#">Open the player</a>
+  <span class="grow"></span>
+  <a class="icon-btn" id="player" href="#" aria-label="Open the player" title="Open the player"></a>
 </header>
 <main class="wrap">
-  <h1 id="room">Jam</h1>
+  <div class="title-row"><h1 id="room">Jam</h1><span id="radio"></span></div>
 
-  <form id="f">
-    <label class="lbl" for="in">Add a song</label>
-    <div class="addrow">
-      <input class="field" id="in" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send" placeholder="Paste a link or type a song name" aria-describedby="hint" required>
-      <button class="btn" id="add">Add</button>
-    </div>
-    <p class="hint" id="hint">Links from YouTube, SoundCloud, Spotify or Tidal, or just the artist and title.</p>
-    <details class="name">
-      <summary id="who">Add your name</summary>
-      <label>Your name <span class="count">(optional, shown next to your songs)</span>
-        <input class="field" id="nm" maxlength="40" autocomplete="nickname">
-      </label>
-    </details>
-    <p class="msg" id="msg" role="status" aria-live="polite"></p>
+  <div id="now"></div>
+
+  <form id="f" class="addbar">
+    <input id="in" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send" placeholder="Paste a link or type a song" aria-label="Add a song" required>
+    <button class="btn" id="add">Add</button>
   </form>
+  <details class="name">
+    <summary id="who">Add your name</summary>
+    <input id="nm" maxlength="40" autocomplete="nickname" placeholder="Your name" aria-label="Your name">
+  </details>
+  <p class="msg" id="msg" role="status" aria-live="polite"></p>
 
-  <div id="sw"></div>
-
-  <section aria-labelledby="h-now">
-    <h2 id="h-now">Now playing</h2>
-    <div id="now"></div>
-  </section>
   <section aria-labelledby="h-q">
-    <h2 id="h-q">Up next <span class="count" id="qn"></span></h2>
+    <div class="sec"><h2 id="h-q">Up next <span class="count" id="qn"></span></h2></div>
     <ol class="list" id="q"></ol>
   </section>
   <details class="recent">
@@ -49,56 +44,67 @@
 <script src="/assets/jam.js"></script>
 <script>
 (() => {
-  const { el, sleeve, chip } = Jam;
+  const { el, sleeve, stateTag, icon, iconButton, setIcon } = Jam;
   const code = location.pathname.split('/')[2];
   const api = Jam.roomApi(code);
   const $ = (id) => document.getElementById(id);
   $('player').href = `/r/${code}/player`;
+  $('player').append(icon('speaker'));
 
   const say = (text, cls) => { $('msg').textContent = text; $('msg').className = 'msg ' + (cls || ''); };
-  const showName = () => { $('who').textContent = $('nm').value.trim() ? `Adding as ${$('nm').value.trim()}` : 'Add your name'; };
+  const showName = () => { const n = $('nm').value.trim(); $('who').textContent = n ? `Adding as ${n}` : 'Add your name'; };
   try { $('nm').value = localStorage.getItem('jam-name') || ''; } catch (e) {}
   showName();
   $('nm').addEventListener('input', showName);
 
-  // One queue row. `now` is the song playing, `done` a finished one.
-  const row = (t, kind) => {
-    const li = el('li', 'track' + (kind ? ' ' + kind : ''));
-    const mid = el('div');
-    const title = el('div', 'title');
-    if (kind === 'now') title.append(el('mark', 'hl', t.title)); else title.textContent = t.title;
-    mid.append(title, el('div', 'sub', [t.artist, t.added_by && `added by ${t.added_by}`].filter(Boolean).join(' · ')));
-    if (kind === 'now') {
-      const bar = el('div', 'bar'); bar.append(el('i'));
-      mid.append(bar, el('div', 'sub times'));
-    } else if (kind !== 'done' || t.status === 'failed') mid.append(chip(t));
-    if (t.status === 'failed' && t.error) mid.append(el('div', 'sub', t.error));
-    li.append(sleeve(t), mid);
-    if (kind === 'done') { li.append(el('span')); return li; }
+  const fail = (e) => say(e.message, 'err');
+  const sub = (t) => [t.artist, t.added_by && `added by ${t.added_by}`].filter(Boolean).join(' · ');
 
+  // The song that is playing: cover, title, a thin progress line and the two controls.
+  const nowRow = (t) => {
+    const box = el('div', 'now');
+    const mid = el('div');
+    const title = el('div', 't');
+    title.append(el('mark', 'hl', t.title));
+    // The playing song needs only its artist; who added it matters in the queue, not here.
+    mid.append(title, el('div', 's', t.artist), el('div', 's times'));
     const acts = el('div', 'acts');
-    const fail = (e) => say(e.message, 'err');
-    if (kind === 'now') {
-      const p = el('button', 'btn ghost sm', t.paused ? 'Resume' : 'Pause');
-      p.type = 'button';
-      p.addEventListener('click', () => api(t.paused ? '/resume' : '/pause', 'POST').then(render).catch(fail));
-      acts.append(p);
-    }
-    const b = el('button', 'btn ghost sm', t.status === 'playing' ? 'Skip' : 'Remove');
-    b.type = 'button';
-    b.setAttribute('aria-label', `${t.status === 'playing' ? 'Skip' : 'Remove'} ${t.title}`);
+    const pause = iconButton(t.paused ? 'play' : 'pause', t.paused ? 'Resume' : 'Pause');
+    pause.addEventListener('click', () => api(t.paused ? '/resume' : '/pause', 'POST').then(render).catch(fail));
     // Skipping cuts the song for everyone, so it takes a second tap.
+    const skip = iconButton('skip', 'Skip');
     let armed = false;
-    b.addEventListener('click', () => {
-      if (kind === 'now' && !armed) {
-        armed = true; b.textContent = 'Tap again to skip';
-        setTimeout(() => { armed = false; b.textContent = 'Skip'; }, 3000);
+    skip.addEventListener('click', () => {
+      if (!armed) {
+        armed = true;
+        skip.className = 'btn sm quiet';
+        skip.replaceChildren(document.createTextNode('Skip?'));
+        setTimeout(() => { armed = false; skip.className = 'icon-btn'; setIcon(skip, 'skip'); }, 3000);
         return;
       }
       api(`/remove/${t.id}`, 'POST').then(render).catch(fail);
     });
-    acts.append(b);
-    li.append(acts);
+    acts.append(pause, skip);
+    const bar = el('div', 'bar');
+    bar.append(el('i'));
+    box.append(sleeve(t), mid, acts, bar);
+    return box;
+  };
+
+  // One song in the queue or the history. Only a song that is not ready shows a status.
+  const row = (t, done) => {
+    const li = el('li', 'row' + (done ? ' done' : ''));
+    const mid = el('div');
+    mid.append(el('div', 't', t.title), el('div', 's', sub(t)));
+    const acts = el('div', 'acts');
+    const tag = stateTag(t);
+    if (tag) acts.append(tag);
+    if (!done) {
+      const rm = iconButton('x', `Remove ${t.title}`);
+      rm.addEventListener('click', () => api(`/remove/${t.id}`, 'POST').then(render).catch(fail));
+      acts.append(rm);
+    }
+    li.append(sleeve(t), mid, acts);
     return li;
   };
 
@@ -119,7 +125,7 @@
 
   let last = '';
   const render = (s) => {
-    sw.update(s.room);
+    rd.update(s.room);
     if (remembered !== s.room.name) { Jam.rooms.remember(code, s.room.name); remembered = s.room.name; }
     clk = s.now && { pos: s.now.position, at: performance.now(), paused: s.now.paused, dur: s.now.duration };
     const json = JSON.stringify({ ...s, now: s.now && { ...s.now, position: 0 } });
@@ -127,31 +133,36 @@
     last = json;
     $('room').textContent = s.room.name;
     document.title = `${s.room.name} · jamroom`;
-    const now = $('now'); now.textContent = '';
-    if (s.now) { const ul = el('ul', 'list'); ul.append(row(s.now, 'now')); now.append(ul); }
+    const now = $('now');
+    now.textContent = '';
+    if (s.now) now.append(nowRow(s.now));
     else {
-      const a = el('a', null, 'Open the player'); a.href = `/r/${code}/player`;
-      now.append(empty('Nothing is playing. Open the player on the computer that’s connected to the speakers. ', a));
+      const a = el('a', null, 'Open the player');
+      a.href = `/r/${code}/player`;
+      now.append(empty('Nothing playing. ', a));
     }
-    const q = $('q'); q.textContent = '';
-    $('qn').textContent = s.queue.length ? `(${s.queue.length})` : '';
-    if (s.queue.length) s.queue.forEach((t) => q.append(row(t)));
-    else q.append(empty(s.room.autoplay ? 'The queue is empty. Autoplay picks the next song when this one ends.' : 'The queue is empty. Add the first song above.'));
+    const q = $('q');
+    q.textContent = '';
+    $('qn').textContent = s.queue.length ? `· ${s.queue.length}` : '';
+    if (s.queue.length) s.queue.forEach((t) => q.append(row(t, false)));
+    else q.append(empty(s.room.autoplay ? 'Nothing queued. Autoplay is on.' : 'Nothing queued.'));
+    const r = $('recent');
+    r.textContent = '';
+    if (s.recent.length) s.recent.forEach((t) => r.append(row(t, true)));
+    else r.append(empty('Nothing yet.'));
     tickBar();
-    const r = $('recent'); r.textContent = '';
-    if (s.recent.length) s.recent.forEach((t) => r.append(row(t, 'done')));
-    else r.append(empty('Nothing has played yet.'));
   };
 
-  const sw = Jam.switches(api, (s) => render(s));
-  $('sw').append(sw.node);
-  const load = () => api('/state').then(render).catch((e) => say(e.message, 'err'));
+  const rd = Jam.radio(api, (s) => render(s));
+  $('radio').append(rd.button);
+  const load = () => api('/state').then(render).catch(fail);
 
   $('f').addEventListener('submit', async (e) => {
     e.preventDefault();
     const name = $('nm').value.trim();
     try { localStorage.setItem('jam-name', name); } catch (e2) {}
-    $('add').disabled = true; say('Looking that up…');
+    $('add').disabled = true;
+    say('Looking that up…');
     try {
       const r = await api('/add', 'POST', { input: $('in').value, name });
       say(r.added === 1 ? `Added “${r.first}”.` : `Added ${r.added} songs.`, 'ok');

@@ -7,36 +7,32 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2317173a'/%3E%3Crect x='6' y='13' width='20' height='8' rx='2' fill='%23ffd23f'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/assets/jam.css">
 <style>
-  .join { padding-top: 8vh; }
-  #recent { margin-bottom: 28px; }
-  #recent h2 { margin-top: 0; }
-  .join .field { font-size: 1.5rem; font-weight: 700; letter-spacing: .08em; min-height: 64px; }
-  .join form .btn { width: 100%; margin-top: 12px; min-height: 56px; font-size: 1.125rem; }
+  .start { padding-top: 6vh; }
+  #recent { margin-top: 24px; }
+  .code { letter-spacing: .06em; font-weight: 600; }
 </style>
 </head>
 <body>
 <header class="top"><span class="mark">jam<mark class="hl">room</mark></span></header>
-<main class="wrap join">
+<main class="wrap start">
   <h1>Join the jam</h1>
 
+  <form id="f" class="addbar" novalidate>
+    <input class="code" id="code" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Room code or link" aria-label="Room code or link" aria-describedby="msg" required>
+    <button class="btn" id="go">Join</button>
+  </form>
+  <p class="msg" id="msg" role="status" aria-live="polite"></p>
+
   <section id="recent" aria-labelledby="h-recent" hidden>
-    <h2 id="h-recent">Your recent rooms</h2>
+    <div class="sec"><h2 id="h-recent">Recent rooms</h2></div>
     <ul class="list" id="rl"></ul>
     <p class="msg" id="rmsg" role="status" aria-live="polite"></p>
   </section>
-
-  <form id="f" novalidate>
-    <label class="lbl" for="code">Room code</label>
-    <input class="field" id="code" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-describedby="hint msg" required>
-    <p class="hint" id="hint">The 10-character code from whoever started the jam. You can paste the whole room link too.</p>
-    <button class="btn" id="go">Join room</button>
-    <p class="msg" id="msg" role="status" aria-live="polite"></p>
-  </form>
 </main>
 <script src="/assets/jam.js"></script>
 <script>
 (() => {
-  const { el } = Jam;
+  const { el, iconButton } = Jam;
   const $ = (id) => document.getElementById(id);
   const say = (text, cls, id = 'msg') => { $(id).textContent = text; $(id).className = 'msg ' + (cls || ''); };
   // Accepts the bare code, or a pasted room link.
@@ -49,16 +45,14 @@
     const ul = $('rl');
     ul.textContent = '';
     rooms.forEach((r) => {
-      const li = el('li', 'room-item');
+      const li = el('li', 'room-row');
       const text = el('div');
-      text.append(el('div', 'title', r.name), el('div', 'sub', `${r.code} · ${Jam.ago(r.at)}`));
-      const join = el('button', 'btn sm', 'Join');
+      text.append(el('div', 't', r.name), el('div', 's', `${r.code} · ${Jam.ago(r.at)}`));
+      const join = el('button', 'btn tonal sm', 'Join');
       join.type = 'button';
       join.setAttribute('aria-label', `Join ${r.name}`);
       join.addEventListener('click', () => enter(r.code, true));
-      const forget = el('button', 'btn ghost sm', 'Forget');
-      forget.type = 'button';
-      forget.setAttribute('aria-label', `Forget ${r.name}`);
+      const forget = iconButton('x', `Forget ${r.name}`);
       forget.addEventListener('click', () => { Jam.rooms.forget(r.code); draw(); say('', '', 'rmsg'); });
       li.append(text, join, forget);
       ul.append(li);
@@ -78,11 +72,11 @@
       if (err.status === 404 && fromList) {
         Jam.rooms.forget(code);
         draw();
-        say('That room doesn’t exist any more, so it was removed from your list.', 'err', 'rmsg');
+        say('That room is gone, so it was removed from the list.', 'err', 'rmsg');
       } else {
-        say(err.status === 404 ? 'No room with that code. Check it and try again.'
-          : err.status === 429 ? 'Too many wrong codes. Wait a minute, then try again.'
-          : 'Can’t reach the server. Check your connection and try again.', 'err', id);
+        say(err.status === 404 ? 'No room with that code.'
+          : err.status === 429 ? 'Too many wrong codes. Wait a minute.'
+          : 'Can’t reach the server.', 'err', id);
         if (!fromList) $('code').focus();
       }
     }

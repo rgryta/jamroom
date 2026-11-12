@@ -7,16 +7,15 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2317173a'/%3E%3Crect x='6' y='13' width='20' height='8' rx='2' fill='%23ffd23f'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/assets/jam.css">
 <style>
-  .room-row { display: grid; gap: 10px; padding: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
-  .room-row.revoked { opacity: .7; }
-  .room-row h3 { margin: 0; font: 700 1.125rem var(--display); letter-spacing: -.02em; display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
-  .code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; color: var(--mut); font-size: .9375rem; }
-  .btns { display: flex; flex-wrap: wrap; gap: 8px; }
-  dialog { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); color: var(--ink); max-width: min(420px, calc(100vw - 32px)); padding: 20px; }
-  dialog::backdrop { background: rgba(15, 16, 36, .6); }
-  dialog h2 { margin-top: 0; }
-  dialog .btns { margin-top: 16px; justify-content: flex-end; }
-  .stat { color: var(--mut); margin: 0 0 8px; }
+  .room-card { padding: 12px 0; border-top: 1px solid var(--line); }
+  .room-card:first-child { border-top: 0; }
+  .room-card.revoked { opacity: .65; }
+  .room-card .t { font-weight: 600; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+  .code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; color: var(--mut); font-size: var(--t2); font-weight: 400; }
+  .btns { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 0 -14px; }
+  dialog p { margin: 0 0 16px; }
+  dialog .btns { justify-content: flex-end; margin-left: 0; }
+  .stat { color: var(--mut); font-size: var(--t2); margin: 0; }
 </style>
 </head>
 <body>
@@ -24,35 +23,28 @@
 <main class="wrap">
   <h1>Rooms</h1>
 
-  <form id="tok">
-    <label class="lbl" for="token">Admin token</label>
-    <div class="addrow">
-      <input class="field" id="token" type="password" autocomplete="current-password" required>
-      <button class="btn">Unlock</button>
-    </div>
+  <form id="tok" class="addbar">
+    <input id="token" type="password" autocomplete="current-password" placeholder="Admin token" aria-label="Admin token" required>
+    <button class="btn">Unlock</button>
   </form>
   <p class="msg" id="msg" role="status" aria-live="polite"></p>
 
   <div id="panel" hidden>
-    <p class="stat" id="lib"></p>
-    <form id="new">
-      <label class="lbl" for="name">New room</label>
-      <div class="addrow">
-        <input class="field" id="name" maxlength="40" placeholder="Room name, for example Office" autocomplete="off" required>
-        <button class="btn">Create room</button>
-      </div>
+    <form id="new" class="addbar">
+      <input id="name" maxlength="40" placeholder="New room name" aria-label="New room name" autocomplete="off" required>
+      <button class="btn">Create</button>
     </form>
-    <h2>All rooms</h2>
+    <div class="sec"><h2>All rooms</h2><span class="stat" id="lib"></span></div>
     <ul class="list" id="rooms"></ul>
   </div>
 </main>
 
-<dialog id="ask" aria-labelledby="ask-h">
-  <h2 id="ask-h"></h2>
+<dialog class="sheet" id="ask" aria-labelledby="ask-h">
+  <div class="sheet-head"><h2 id="ask-h"></h2></div>
   <p id="ask-p"></p>
   <div class="btns">
-    <button class="btn ghost" id="keep" type="button">Keep room</button>
-    <button class="btn warn" id="drop" type="button">Revoke room</button>
+    <button class="btn quiet" id="keep" type="button">Keep room</button>
+    <button class="btn" id="drop" type="button">Revoke room</button>
   </div>
 </dialog>
 
@@ -82,7 +74,7 @@
 
   const confirmRevoke = (room) => new Promise((resolve) => {
     $('ask-h').textContent = `Revoke “${room.name}”?`;
-    $('ask-p').textContent = 'Its links stop working straight away and anyone in the room is locked out. This can’t be undone.';
+    $('ask-p').textContent = 'Its links stop working straight away. This can’t be undone.';
     const done = (yes) => { $('ask').close(); $('keep').onclick = $('drop').onclick = null; resolve(yes); };
     $('keep').onclick = () => done(false);
     $('drop').onclick = () => done(true);
@@ -90,19 +82,19 @@
   });
 
   const draw = (data) => {
-    $('lib').textContent = `${data.library_tracks.toLocaleString()} songs in the music library index.`;
+    $('lib').textContent = `${data.library_tracks.toLocaleString()} songs indexed`;
     const ul = $('rooms'); ul.textContent = '';
-    if (!data.rooms.length) ul.append(el('li', 'empty', 'No rooms yet. Create one above.'));
+    if (!data.rooms.length) ul.append(el('li', 'empty', 'No rooms yet.'));
     data.rooms.forEach((r) => {
-      const li = el('li', 'room-row' + (r.revoked ? ' revoked' : ''));
-      const h = el('h3', null, r.name);
-      h.append(el('span', 'code', r.code), el('span', 'count', r.revoked ? 'Revoked' : `Created ${new Date(r.created_at * 1000).toLocaleDateString()}`));
+      const li = el('li', 'room-card' + (r.revoked ? ' revoked' : ''));
+      const t = el('div', 't', r.name);
+      t.append(el('span', 'code', r.code), el('span', 'code', r.revoked ? 'revoked' : new Date(r.created_at * 1000).toLocaleDateString()));
       const btns = el('div', 'btns');
       if (!r.revoked) {
         const link = `${location.origin}/r/${r.code}`;
-        const add = el('button', 'btn ghost sm', 'Copy add link'); add.type = 'button';
+        const add = el('button', 'btn quiet sm', 'Copy add link'); add.type = 'button';
         add.addEventListener('click', () => copy(add, link));
-        const player = el('button', 'btn ghost sm', 'Copy player link'); player.type = 'button';
+        const player = el('button', 'btn quiet sm', 'Copy player link'); player.type = 'button';
         player.addEventListener('click', () => copy(player, `${link}/player`));
         const revoke = el('button', 'btn warn sm', 'Revoke'); revoke.type = 'button';
         revoke.setAttribute('aria-label', `Revoke ${r.name}`);
@@ -111,7 +103,7 @@
         });
         btns.append(add, player, revoke);
       }
-      li.append(h, btns);
+      li.append(t, btns);
       ul.append(li);
     });
   };
@@ -119,11 +111,11 @@
   const load = async () => {
     try {
       draw(await call('/rooms'));
-      $('tok').hidden = true; $('panel').hidden = false;
+      $('tok').hidden = true; $('panel').hidden = false; say('');
       try { sessionStorage.setItem('jam-admin', token); } catch (e) {}
     } catch (e) {
       $('tok').hidden = false; $('panel').hidden = true;
-      if (token) say(e.status === 401 ? 'That token isn’t right.' : e.status === 429 ? 'Too many tries. Wait a minute, then try again.' : e.message, 'err');
+      if (token) say(e.status === 401 ? 'That token isn’t right.' : e.status === 429 ? 'Too many tries. Wait a minute.' : e.message, 'err');
       try { sessionStorage.removeItem('jam-admin'); } catch (e2) {}
     }
   };
@@ -131,7 +123,7 @@
   $('tok').addEventListener('submit', (e) => { e.preventDefault(); token = $('token').value; load(); });
   $('new').addEventListener('submit', (e) => {
     e.preventDefault();
-    call('/rooms', 'POST', { name: $('name').value }).then((r) => { $('name').value = ''; return load(); }).catch((err) => say(err.message, 'err'));
+    call('/rooms', 'POST', { name: $('name').value }).then(() => { $('name').value = ''; return load(); }).catch((err) => say(err.message, 'err'));
   });
   if (token) load();
 })();
