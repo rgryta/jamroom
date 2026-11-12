@@ -8,6 +8,7 @@ services:
     group_add:
       - "950"
     read_only: true
+    init: true
     cap_drop:
       - ALL
     security_opt:

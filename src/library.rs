@@ -162,12 +162,16 @@ pub fn place(src: &Path, dest: &Path, root: &Path) -> Result<()> {
     let mut cur = root.to_path_buf();
     for c in parent.strip_prefix(root).unwrap_or(parent).components() {
         cur.push(c);
-        if !cur.exists() {
-            std::fs::create_dir(&cur)?;
-            set_mode(&cur, 0o775);
+        match std::fs::create_dir(&cur) {
+            Ok(()) => set_mode(&cur, 0o775),
+            // Another job may have made it a moment ago.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e.into()),
         }
     }
-    let part = dest.with_extension("part");
+    // A name of its own per call: two jobs finishing the same song must not share one temp file.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let part = dest.with_extension(format!("{}.part", NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     std::fs::copy(src, &part)?;
     set_mode(&part, 0o664);
     std::fs::rename(&part, dest)?;
@@ -268,7 +272,7 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         let dest = target_path(&root, "Artist A", Some("An Album"), "A Title", "m4a");
         place(&src, &dest, &root).unwrap();
-        assert!(dest.exists() && !dest.with_extension("part").exists());
+        assert!(dest.exists() && !dest.with_extension("0.part").exists());
 
         let e = read_entry(&dest, &root).unwrap();
         assert_eq!((e.artist.as_str(), e.title.as_str()), ("Artist A, Artist B", "A Title"));

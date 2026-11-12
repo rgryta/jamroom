@@ -36,8 +36,13 @@ fn ensure_ytdlp(cfg: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Docker stops a container with SIGTERM, which PID 1 ignores unless it asks for it.
 async fn shutdown() {
-    let _ = tokio::signal::ctrl_c().await;
+    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("can listen for SIGTERM");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = term.recv() => {}
+    }
 }
 
 #[tokio::main]

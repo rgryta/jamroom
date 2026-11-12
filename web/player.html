@@ -73,7 +73,19 @@
   // Always say which track finished, so a late "ended" cannot end the track that replaced it.
   function advance(id) { var done = id !== null ? '?done=' + id : ''; return api('/next' + done, 'POST').then(show).catch(function () {}); }
   a.addEventListener('ended', function () { advance(cur); });
-  a.addEventListener('error', function () { if (cur !== null) { var failed = cur; setTimeout(function () { advance(failed); }, 1500); } });
+  // A network blip should not cost the whole song: reload it once at the same spot, then give up and skip.
+  var retried = null;
+  a.addEventListener('error', function () {
+    if (cur === null) return;
+    var failed = cur, at = a.currentTime, first = retried !== failed;
+    retried = failed;
+    setTimeout(function () {
+      if (cur !== failed) return;
+      if (!first) { advance(failed); return; }
+      a.src = '/media/' + code + '/' + failed; a.currentTime = at;
+      if (started) a.play().catch(function () {});
+    }, 1500);
+  });
 
   $('start').addEventListener('click', function () {
     started = true; $('start').hidden = true; $('deck').hidden = false;

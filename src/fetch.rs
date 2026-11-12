@@ -18,11 +18,7 @@ impl Drop for Scratch {
 }
 
 fn downloaded_file(dir: &Path) -> Option<PathBuf> {
-    std::fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .find(|p| p.is_file() && (library::is_audio(p) || p.extension().is_some_and(|e| e == "webm" || e == "mp4")))
+    std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).find(|p| p.is_file() && library::is_audio(p))
 }
 
 async fn cover_bytes(app: &App, url: &str) -> Option<Vec<u8>> {
@@ -105,6 +101,7 @@ async fn make_ready(app: &App, job: &Job) -> Result<()> {
             library::place(&file, &dest2, &root)
         })
         .await??;
+        tracing::info!(path = %dest.display(), "added to library");
     }
     if let Some(e) = library::read_entry(&dest, &app.cfg.library) {
         app.db.lib_upsert(&e)?;
@@ -126,7 +123,10 @@ pub async fn run(app: Arc<App>) {
                         Ok(()) => tracing::info!(id = job.id, title = %job.item.title, "ready"),
                         Err(e) => {
                             tracing::warn!(id = job.id, title = %job.item.title, error = %e, "failed");
-                            let _ = app.db.set_failed(job.id, &e.to_string().chars().take(160).collect::<String>());
+                            // Disk errors name server paths; clients only get a short note.
+                            let shown =
+                                if e.downcast_ref::<std::io::Error>().is_some() { "could not save the file".into() } else { e.to_string() };
+                            let _ = app.db.set_failed(job.id, &shown.chars().take(160).collect::<String>());
                         }
                     }
                     drop(permit);
@@ -140,5 +140,76 @@ pub async fn run(app: Arc<App>) {
                 let _ = tokio::time::timeout(std::time::Duration::from_secs(3), app.wake.notified()).await;
             }
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::{
+        config::Config,
+        db::{Db, NewTrack},
+    };
+
+    /// A stand-in for yt-dlp: copies a real silent m4a to the `-o` path.
+    fn app_with_stub(dir: &Path) -> Arc<App> {
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/silent.m4a");
+        let stub = dir.join("stub.sh");
+        std::fs::write(
+            &stub,
+            format!("while [ $# -gt 0 ]; do [ \"$1\" = -o ] && out=$2; shift; done\nout=$(echo \"$out\" | sed 's/%(id)s/x/;s/%(ext)s/m4a/')\ncp {fixture} \"$out\"\n"),
+        )
+        .unwrap();
+        let mut cfg = Config::from_env();
+        cfg.python = "sh".into();
+        cfg.ytdlp = stub;
+        cfg.data = dir.join("data");
+        cfg.library = dir.join("lib");
+        std::fs::create_dir_all(&cfg.library).unwrap();
+        std::fs::create_dir_all(cfg.data.join("tmp")).unwrap();
+        App::new(Arc::new(cfg), Db::memory().unwrap()).unwrap()
+    }
+
+    fn song() -> NewTrack {
+        NewTrack {
+            artist: "Artist".into(),
+            dir_artist: "Artist".into(),
+            title: "Song".into(),
+            album: Some("Album".into()),
+            src: Some("https://music.youtube.com/watch?v=x".into()),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_download_is_tagged_filed_and_playable_even_when_two_jobs_want_the_same_song() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app_with_stub(dir.path());
+        let (a, b) = (app.db.add_track("r", &song()).unwrap(), app.db.add_track("r", &song()).unwrap());
+        let (ja, jb) = (app.db.next_job().unwrap().unwrap(), app.db.next_job().unwrap().unwrap());
+        let (ra, rb) = tokio::join!(make_ready(&app, &ja), make_ready(&app, &jb));
+        ra.unwrap();
+        rb.unwrap();
+        let file = dir.path().join("lib/Artist/Album/Song.m4a");
+        assert!(file.exists());
+        assert_eq!(app.db.track_file("r", a).unwrap().as_deref(), file.to_str());
+        assert_eq!(app.db.track_file("r", b).unwrap().as_deref(), file.to_str());
+        assert_eq!(std::fs::read_dir(file.parent().unwrap()).unwrap().count(), 1, "no .part files left behind");
+    }
+
+    #[tokio::test]
+    async fn a_song_already_in_the_library_is_not_downloaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app_with_stub(dir.path());
+        let first = app.db.add_track("r", &song()).unwrap();
+        let job = app.db.next_job().unwrap().unwrap();
+        make_ready(&app, &job).await.unwrap();
+        library::scan(&app.db, &app.cfg.library).unwrap();
+        // Break the downloader: a second request must be served from the library.
+        std::fs::remove_file(&app.cfg.ytdlp).unwrap();
+        let second = app.db.add_track("r", &song()).unwrap();
+        let job = app.db.next_job().unwrap().unwrap();
+        make_ready(&app, &job).await.unwrap();
+        assert_eq!(app.db.track_file("r", second).unwrap(), app.db.track_file("r", first).unwrap());
     }
 }

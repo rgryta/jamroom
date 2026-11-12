@@ -174,7 +174,7 @@ async fn advance(State(app): Shared, ConnectInfo(a): Client, h: HeaderMap, Path(
 
 #[derive(Deserialize)]
 struct NextQuery {
-    /// The track the player just finished. Without it, whatever is playing is ended.
+    /// The track the player just finished. Without it nothing is ended, only the next track starts.
     done: Option<i64>,
 }
 
@@ -186,9 +186,8 @@ async fn next(
     Query(q): Query<NextQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let room = live_room(&app, &client_ip(&h, a), &code)?;
-    match q.done {
-        Some(id) => app.db.finish_track(&room.code, id)?,
-        None => app.db.finish_current(&room.code)?,
+    if let Some(id) = q.done {
+        app.db.finish_track(&room.code, id)?;
     }
     app.db.claim_next(&room.code)?;
     state_json(&app, &room)
@@ -360,7 +359,7 @@ mod tests {
         // Another room cannot read it.
         app.db.create_room("room2", "Other").unwrap();
         assert_eq!(call(&r, "GET", &format!("/media/room2/{id}"), false, None).await.0, StatusCode::NOT_FOUND);
-        let (_, body) = call(&r, "POST", "/api/r/room1/next", false, None).await;
+        let (_, body) = call(&r, "POST", &format!("/api/r/room1/next?done={id}"), false, None).await;
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert!(v["now"].is_null());
         assert_eq!(v["recent"][0]["status"], "played");

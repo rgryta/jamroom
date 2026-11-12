@@ -318,6 +318,15 @@ pub fn media_entry(v: &Value) -> Option<NewTrack> {
     })
 }
 
+/// True when a YouTube or SoundCloud link names a list of songs rather than one.
+fn is_playlist(url: &Url) -> bool {
+    let has = |k: &str| url.query_pairs().any(|(key, _)| key == k);
+    // youtu.be keeps the video id in the path, so a `list=` there still means one song.
+    let one_video = has("v") || url.host_str() == Some("youtu.be");
+    let path = url.path();
+    path.contains("/playlist") || path.contains("/sets/") || (has("list") && !one_video)
+}
+
 pub struct Resolver {
     cfg: Arc<Config>,
     http: reqwest::Client,
@@ -375,9 +384,7 @@ impl Resolver {
     }
 
     async fn media(&self, url: &Url) -> Result<Vec<NewTrack>> {
-        let has = |k: &str| url.query_pairs().any(|(key, _)| key == k);
-        let path = url.path();
-        let playlist = path.contains("/playlist") || path.contains("/sets/") || (has("list") && !has("v"));
+        let playlist = is_playlist(url);
         let end = self.cfg.max_playlist.to_string();
         let args: Vec<&str> = if playlist {
             vec!["--flat-playlist", "--playlist-end", &end, "--", url.as_str()]
@@ -441,7 +448,9 @@ impl Resolver {
 
     /// The YouTube Music recording that matches a known artist, title and length.
     pub async fn match_source(&self, artist: &str, title: &str, duration: Option<f64>) -> Result<Cand> {
-        let plain: String = title.split(['(', '[']).next().unwrap_or(title).trim().to_string();
+        let cut = title.split(['(', '[']).next().unwrap_or(title).trim();
+        // "(I Can't Get No) Satisfaction" cuts to nothing; keep the whole title then.
+        let plain = if cut.is_empty() { title } else { cut };
         let query = format!("{} {}", first_artist(artist), plain);
         let cands = self.ytm_search(&query).await.map_err(|_| anyhow!("music search is not answering"))?;
         pick_best(&cands, artist, title, duration).cloned().ok_or_else(|| anyhow!("no matching recording found"))
@@ -469,6 +478,15 @@ mod tests {
         assert!(matches!(classify("https://soundcloud.com/a/b"), Ok(Media(_))));
         assert!(matches!(classify("https://tidal.com/browse/track/1"), Ok(Tidal(_))));
         assert_eq!(classify("The Sequence Disturbia"), Ok(Search("The Sequence Disturbia".into())));
+    }
+
+    #[test]
+    fn a_short_link_with_a_list_is_still_one_song() {
+        let p = |s: &str| is_playlist(&Url::parse(s).unwrap());
+        assert!(!p("https://youtu.be/fsR452Wrnak?list=RDfsR452Wrnak"));
+        assert!(!p("https://www.youtube.com/watch?v=fsR452Wrnak&list=PL123"));
+        assert!(p("https://www.youtube.com/playlist?list=PL123"));
+        assert!(p("https://soundcloud.com/a/sets/b"));
     }
 
     #[test]

@@ -218,12 +218,6 @@ impl Db {
         Ok(out)
     }
 
-    /// Mark the playing track as played. Used for both "ended" and "skip".
-    pub fn finish_current(&self, room: &str) -> Result<()> {
-        self.c().execute("UPDATE tracks SET status = 'played' WHERE room = ?1 AND status = 'playing'", [room])?;
-        Ok(())
-    }
-
     /// Mark one specific track as played, only if it is the one playing. A late "ended" from the
     /// player must not end the track that replaced it.
     pub fn finish_track(&self, room: &str, id: i64) -> Result<()> {
@@ -329,12 +323,7 @@ impl Db {
     // ---- library index ----
 
     pub fn lib_upsert(&self, e: &LibEntry) -> Result<()> {
-        self.c().execute(
-            "INSERT INTO library(path, mtime, artist, title, tn, duration) VALUES(?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(path) DO UPDATE SET mtime = ?2, artist = ?3, title = ?4, tn = ?5, duration = ?6",
-            params![e.path, e.mtime, e.artist, e.title, e.tn, e.duration],
-        )?;
-        Ok(())
+        self.lib_upsert_many(std::slice::from_ref(e))
     }
 
     pub fn lib_upsert_many(&self, entries: &[LibEntry]) -> Result<()> {
@@ -415,7 +404,7 @@ mod tests {
         assert_eq!(db.claim_next("r").unwrap().unwrap().id, a);
         // Claiming again returns the same playing track.
         assert_eq!(db.claim_next("r").unwrap().unwrap().id, a);
-        db.finish_current("r").unwrap();
+        db.finish_track("r", a).unwrap();
         assert_eq!(db.claim_next("r").unwrap().unwrap().id, b);
     }
 
