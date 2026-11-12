@@ -9,7 +9,7 @@ use crate::{
     config::Config,
     db::{Db, Upgrade, now},
     library,
-    norm::norm,
+    norm::{artist_match, norm},
     resolve::first_artist,
 };
 use anyhow::{Result, anyhow, bail};
@@ -248,6 +248,109 @@ impl Slskd {
     }
 }
 
+/// Words that mark a bracket group or tail as video-site decoration rather than part of the title.
+const VIDEO_WORDS: &[&str] = &["official", "video", "audio", "lyric", "lyrics", "visualizer", "hd", "4k", "hq"];
+/// Album names that are really compilations.
+const COMPILATION_WORDS: &[&str] =
+    &["compilation", "various", "what i call", "ultimix", "just dance", "vol.", "volume", "hits", "best of", "summer", "party", "karaoke"];
+
+fn words(s: &str) -> impl Iterator<Item = String> + '_ {
+    s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase)
+}
+
+fn alnum(s: &str) -> String {
+    s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+}
+
+/// A song title without video-site decoration: "(Official Video)", "[HD]", "- Lyrics" and a
+/// trailing "ft. Someone" (the featured artist belongs in the artist tag).
+pub fn tidy_title(title: &str) -> String {
+    let chars: Vec<char> = title.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let close = match chars[i] {
+            '(' => Some(')'),
+            '[' => Some(']'),
+            _ => None,
+        };
+        if let Some(close) = close
+            && let Some(len) = chars[i + 1..].iter().position(|c| *c == close)
+        {
+            let inner: String = chars[i + 1..i + 1 + len].iter().collect();
+            if words(&inner).any(|w| VIDEO_WORDS.contains(&w.as_str())) {
+                i += len + 2;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    let mut out = out.split_whitespace().collect::<Vec<_>>().join(" ");
+    if let Some((head, tail)) = out.split_once(" - ")
+        && words(tail).any(|w| VIDEO_WORDS.contains(&w.as_str()))
+    {
+        out = head.trim().to_string();
+    }
+    let lower = out.to_ascii_lowercase();
+    let cut = [" feat.", " feat ", " ft.", " ft ", " featuring "].iter().filter_map(|m| lower.find(m)).min();
+    if let Some(i) = cut {
+        out.truncate(i);
+    }
+    let out = out.trim().to_string();
+    if out.is_empty() { title.trim().to_string() } else { out }
+}
+
+/// The artist a song is filed under: the first one, without "feat. ..." tails.
+pub fn main_artist(artist: &str) -> String {
+    let mut first = first_artist(artist);
+    let lower = first.to_ascii_lowercase();
+    if let Some(i) = [" feat.", " feat ", " ft.", " ft ", " featuring "].iter().filter_map(|m| lower.find(m)).min() {
+        first.truncate(i);
+    }
+    first.trim().to_string()
+}
+
+/// True for albums that only collect other people's songs ("Various Artists", "Now That's What I Call Music!").
+pub fn looks_like_compilation(album: &str, album_artist: Option<&str>, artist: &str) -> bool {
+    if album_artist.is_some_and(|aa| !artist_match(aa, artist)) {
+        return true;
+    }
+    let low = album.to_lowercase();
+    COMPILATION_WORDS.iter().any(|w| low.contains(w))
+}
+
+/// How the downloaded file is named and tagged in the library.
+#[derive(Debug, PartialEq)]
+pub struct Names {
+    pub artist: String,
+    pub dir_artist: String,
+    pub title: String,
+    pub album: Option<String>,
+}
+
+/// Prefer what the file says about itself (Soulseek files are usually well tagged), but never
+/// the video-site title the request came with, and never a compilation album.
+pub fn choose_names(tags: &library::FileTags, wanted_artist: &str, wanted_title: &str) -> Names {
+    let wanted = tidy_title(wanted_title);
+    let title = tags
+        .title
+        .as_deref()
+        .map(tidy_title)
+        .filter(|t| {
+            let (a, b) = (alnum(t), alnum(&wanted));
+            a.chars().count() >= 3 && (b.starts_with(&a) || a.starts_with(&b))
+        })
+        .unwrap_or(wanted);
+    let artist = tags
+        .artist
+        .clone()
+        .filter(|a| !matches!(alnum(a).as_str(), "variousartists" | "various" | "va"))
+        .unwrap_or_else(|| wanted_artist.to_string());
+    let album = tags.album.clone().filter(|al| !looks_like_compilation(al, tags.album_artist.as_deref(), &artist));
+    Names { dir_artist: main_artist(&artist), artist, title, album }
+}
+
 /// Where slskd put a finished download: `<complete>/<folder name>/<file>`, or anywhere under it.
 pub fn locate(downloads: &Path, remote: &str) -> Option<PathBuf> {
     let parts: Vec<&str> = remote.split(['\\', '/']).collect();
@@ -277,10 +380,15 @@ fn import(cfg: &Config, up: &Upgrade) -> Result<PathBuf> {
     let copy = tmp.join(src.file_name().ok_or_else(|| anyhow!("no file name"))?);
     let result = (|| {
         std::fs::copy(&src, &copy)?;
-        let album = library::read_album(&copy);
-        library::write_tags(&copy, &up.artist, &first_artist(&up.artist), &up.title, album.as_deref(), None)?;
+        let names = choose_names(&library::read_tags(&copy), &up.artist, &up.title);
+        library::write_tags(&copy, &names.artist, &names.dir_artist, &names.title, names.album.as_deref(), None)?;
+        if names.album.is_none() {
+            library::clear_album(&copy)?;
+        }
         let ext = copy.extension().and_then(|e| e.to_str()).unwrap_or("flac").to_ascii_lowercase();
-        let dest = library::target_path(&cfg.library, &first_artist(&up.artist), album.as_deref(), &up.title, &ext);
+        // Always `Non-Album/<Artist>/<Title>`: never into your own artist and album folders, so
+        // nothing of yours is touched and a compilation cannot create a folder of its own.
+        let dest = library::target_path(&cfg.library, &names.dir_artist, None, &names.title, &ext);
         if !dest.exists() {
             library::place(&copy, &dest, &cfg.library)?;
         }
@@ -294,10 +402,24 @@ fn settle(db: &Db, up: &Upgrade, status: &str, note: &str) -> Result<()> {
     db.upgrade_put(&Upgrade { status: status.into(), note: note.into(), updated_at: now(), ..up.clone() })
 }
 
+/// The library already has this song: let waiting queue entries use that copy when it is the same recording.
+fn use_existing(cfg: &Config, db: &Db, up: &Upgrade) -> Result<()> {
+    if let Some(same) = library::find(db, &cfg.cache, &up.artist, &up.title, up.duration).filter(|p| !Path::new(p).starts_with(&cfg.cache))
+    {
+        db.apply_upgrade(&up.cached, &same)?;
+    }
+    Ok(())
+}
+
 /// Check a download that was queued earlier.
 async fn follow(cfg: &Config, db: &Db, sl: &Slskd, up: &Upgrade) -> Result<()> {
     match sl.transfer(&up.peer, &up.remote).await? {
         Some((state, _)) if state == "Completed, Succeeded" => {
+            // The song may have joined the library while the download waited. Never add a second copy.
+            if library::same_song(db, &cfg.cache, &up.artist, &up.title).is_some() {
+                use_existing(cfg, db, up)?;
+                return settle(db, up, "done", "already in the library");
+            }
             let (cfg2, up2) = (cfg.clone(), up.clone());
             match tokio::task::spawn_blocking(move || import(&cfg2, &up2)).await? {
                 Ok(dest) => {
@@ -326,7 +448,8 @@ async fn follow(cfg: &Config, db: &Db, sl: &Slskd, up: &Upgrade) -> Result<()> {
 
 /// Search for one song and queue the best copy.
 async fn search_one(db: &Db, sl: &Slskd, cfg: &Config, fresh: Upgrade) -> Result<()> {
-    if library::find(db, &cfg.cache, &fresh.artist, &fresh.title, fresh.duration).is_some_and(|p| !Path::new(&p).starts_with(&cfg.cache)) {
+    if library::same_song(db, &cfg.cache, &fresh.artist, &fresh.title).is_some() {
+        use_existing(cfg, db, &fresh)?;
         return settle(db, &fresh, "done", "already in the library");
     }
     let want = Want { artist: fresh.artist.clone(), title: fresh.title.clone(), duration: fresh.duration };
@@ -507,10 +630,9 @@ mod tests {
         url
     }
 
-    #[tokio::test]
-    async fn a_cached_song_is_upgraded_from_soulseek_end_to_end() {
+    /// A library, a cache, a download folder with one tagged FLAC in it, a fake slskd and one cached song.
+    async fn world(requested_title: &str) -> (tempfile::TempDir, Config, Db, Slskd, i64) {
         use crate::db::NewTrack;
-        use lofty::{file::TaggedFileExt, tag::Accessor};
         let dir = tempfile::tempdir().unwrap();
         let remote = r"\\bob\Music\Artist\Some Album\01 Song.flac";
         let mut cfg = Config::from_env();
@@ -521,21 +643,30 @@ mod tests {
         cfg.slskd_url = fake_slskd(remote).await;
         std::fs::create_dir_all(cfg.slsk_downloads.join("Some Album")).unwrap();
         std::fs::create_dir_all(&cfg.library).unwrap();
-        std::fs::write(cfg.slsk_downloads.join("Some Album/01 Song.flac"), include_bytes!("../tests/fixtures/silent.flac")).unwrap();
+        let file = cfg.slsk_downloads.join("Some Album/01 Song.flac");
+        std::fs::write(&file, include_bytes!("../tests/fixtures/silent.flac")).unwrap();
+        // How a real Soulseek file is tagged: clean title, and a compilation as its album.
+        library::write_tags(&file, "Artist", "Various Artists", "Song", Some("Now That's What I Call Music! 74"), None).unwrap();
 
         let db = Db::memory().unwrap();
         let song = NewTrack {
             artist: "Artist".into(),
             dir_artist: "Artist".into(),
-            title: "Song".into(),
+            title: requested_title.into(),
             duration: Some(2.0),
             ..Default::default()
         };
         let id = db.add_track("r", &song).unwrap();
         db.next_job().unwrap();
-        let cached = cfg.cache.join("Non-Album/Artist/Song.m4a");
-        db.set_ready(id, cached.to_str().unwrap(), true).unwrap();
+        db.set_ready(id, cfg.cache.join("Non-Album/Artist/Song.m4a").to_str().unwrap(), true).unwrap();
         let sl = Slskd::new(&cfg.slskd_url).unwrap();
+        (dir, cfg, db, sl, id)
+    }
+
+    #[tokio::test]
+    async fn a_cached_song_is_upgraded_from_soulseek_end_to_end() {
+        use lofty::{file::TaggedFileExt, tag::Accessor};
+        let (_dir, cfg, db, sl, id) = world("Song (Official Video)").await;
 
         // Round one searches and asks for the file; round two sees it finished and files it.
         tick(&cfg, &db, &sl).await.unwrap();
@@ -543,11 +674,13 @@ mod tests {
         tick(&cfg, &db, &sl).await.unwrap();
         assert_eq!(db.upgrades().unwrap()["artist|song"].status, "done");
 
+        // Filed under Non-Album with the file's own clean title, not the video title or the compilation.
         let dest = cfg.library.join("Non-Album/Artist/Song.flac");
-        assert!(dest.exists());
+        assert!(dest.exists(), "{:?}", std::fs::read_dir(&cfg.library).unwrap().flatten().collect::<Vec<_>>());
         let tags = lofty::read_from_path(&dest).unwrap();
         let tag = tags.primary_tag().unwrap();
         assert_eq!((tag.artist().as_deref(), tag.title().as_deref()), (Some("Artist"), Some("Song")));
+        assert_eq!(tag.album(), None, "a compilation is not kept as the album");
         assert_eq!(db.track_file("r", id).unwrap().as_deref(), dest.to_str(), "the queued song now plays the lossless file");
         assert!(
             db.lib_by_title(&norm("Song")).unwrap().iter().any(|(p, ..)| p == dest.to_str().unwrap()),
@@ -558,5 +691,88 @@ mod tests {
         // Nothing left to upgrade: a further round changes nothing.
         tick(&cfg, &db, &sl).await.unwrap();
         assert_eq!(db.upgrades().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_song_you_already_own_is_never_added_a_second_time() {
+        use crate::db::LibEntry;
+        let (_dir, cfg, db, sl, id) = world("Song").await;
+        // Your own copy, a slightly different edit (so not the same length), in your own folders.
+        let mine = cfg.library.join("Artist/Album/01 Song.mp3");
+        db.lib_upsert(&LibEntry {
+            path: mine.to_string_lossy().into(),
+            mtime: 1,
+            artist: "Artist".into(),
+            title: "Song".into(),
+            tn: norm("Song"),
+            duration: Some(30.0),
+        })
+        .unwrap();
+        tick(&cfg, &db, &sl).await.unwrap();
+        let up = &db.upgrades().unwrap()["artist|song"];
+        assert_eq!((up.status.as_str(), up.note.as_str()), ("done", "already in the library"));
+        assert!(!cfg.library.join("Non-Album").exists(), "nothing was added to the library");
+        assert_ne!(db.track_file("r", id).unwrap().as_deref(), mine.to_str(), "a different edit is not swapped in");
+        // The same recording is used instead of the cached download.
+        db.lib_upsert(&LibEntry {
+            path: mine.to_string_lossy().into(),
+            mtime: 1,
+            artist: "Artist".into(),
+            title: "Song".into(),
+            tn: norm("Song"),
+            duration: Some(2.0),
+        })
+        .unwrap();
+        let again = Upgrade { key: "artist|song".into(), ..up.clone() };
+        use_existing(&cfg, &db, &again).unwrap();
+        assert_eq!(db.track_file("r", id).unwrap().as_deref(), mine.to_str());
+    }
+
+    #[test]
+    fn titles_artists_and_albums_are_tidied_for_the_library() {
+        assert_eq!(tidy_title("Sucker (Official Video)"), "Sucker");
+        assert_eq!(tidy_title("Too Sweet [HD]"), "Too Sweet");
+        assert_eq!(tidy_title("Song - Official Lyric Video"), "Song");
+        assert_eq!(tidy_title("Morning After Dark (Official Music Video) ft. Nelly Furtado, Soshy"), "Morning After Dark");
+        assert_eq!(
+            tidy_title("Get Lucky (feat. Pharrell Williams)"),
+            "Get Lucky (feat. Pharrell Williams)",
+            "a bracketed feature is part of the title"
+        );
+        assert_eq!(tidy_title("(Official Video)"), "(Official Video)", "never leave a title empty");
+        assert_eq!(main_artist("Kato feat. Jon"), "Kato");
+        assert_eq!(main_artist("Timbaland, Nelly Furtado"), "Timbaland");
+        assert_eq!(main_artist("Simon & Garfunkel"), "Simon & Garfunkel");
+        assert!(looks_like_compilation("Now That's What I Call Music! 74", None, "Sean Kingston"));
+        assert!(looks_like_compilation("Anything", Some("Various Artists"), "Sean Kingston"));
+        assert!(!looks_like_compilation("Homework", Some("Daft Punk"), "Daft Punk"));
+        assert!(!looks_like_compilation("Unheard", None, "Hozier"));
+    }
+
+    #[test]
+    fn the_file_is_trusted_for_names_but_the_request_fills_gaps() {
+        let tags = library::FileTags {
+            artist: Some("Kato feat. Jon".into()),
+            title: Some("Turn The Lights Off".into()),
+            album: Some("Summer Heat 2010".into()),
+            album_artist: None,
+        };
+        let n = choose_names(&tags, "Kato feat. Jon", "Turn The Lights Off (Jon Hamm)");
+        assert_eq!((n.dir_artist.as_str(), n.title.as_str(), n.album), ("Kato", "Turn The Lights Off", None));
+        // A file with no tags falls back to the tidied request.
+        let n = choose_names(&library::FileTags::default(), "Hozier", "Too Sweet (Official Video)");
+        assert_eq!((n.artist.as_str(), n.title.as_str()), ("Hozier", "Too Sweet"));
+        // A wrong title tag is ignored; "Various Artists" is not an artist.
+        let odd = library::FileTags { artist: Some("Various Artists".into()), title: Some("Other Song".into()), ..Default::default() };
+        let n = choose_names(&odd, "Hozier", "Too Sweet");
+        assert_eq!((n.artist.as_str(), n.title.as_str()), ("Hozier", "Too Sweet"));
+        // A real album is kept.
+        let real = library::FileTags {
+            artist: Some("Daft Punk".into()),
+            album: Some("Homework".into()),
+            album_artist: Some("Daft Punk".into()),
+            ..Default::default()
+        };
+        assert_eq!(choose_names(&real, "Daft Punk", "Around the World").album.as_deref(), Some("Homework"));
     }
 }

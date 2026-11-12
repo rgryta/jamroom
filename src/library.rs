@@ -54,11 +54,35 @@ fn names_from_path(path: &Path, root: &Path) -> (String, String) {
     (artist, title)
 }
 
-/// The album tag of a file, if it has a useful one.
-pub fn read_album(path: &Path) -> Option<String> {
-    let tagged = lofty::read_from_path(path).ok()?;
-    let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?;
-    tag.album().map(|a| a.to_string()).filter(|a| !a.trim().is_empty())
+/// The tags a file already carries.
+#[derive(Debug, Default, Clone)]
+pub struct FileTags {
+    pub artist: Option<String>,
+    pub title: Option<String>,
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+}
+
+pub fn read_tags(path: &Path) -> FileTags {
+    let Ok(tagged) = lofty::read_from_path(path) else { return FileTags::default() };
+    let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) else { return FileTags::default() };
+    let text = |v: Option<&str>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    FileTags {
+        artist: text(tag.artist().as_deref()),
+        title: text(tag.title().as_deref()),
+        album: text(tag.album().as_deref()),
+        album_artist: text(tag.get_string(ItemKey::AlbumArtist)),
+    }
+}
+
+/// Remove the album tag, for songs that only came off a compilation.
+pub fn clear_album(path: &Path) -> Result<()> {
+    let mut tagged = lofty::read_from_path(path)?;
+    if let Some(tag) = tagged.primary_tag_mut() {
+        tag.remove_album();
+    }
+    tagged.save_to_path(path, WriteOptions::default())?;
+    Ok(())
 }
 
 pub fn read_entry(path: &Path, root: &Path) -> Option<LibEntry> {
@@ -142,6 +166,15 @@ pub fn find(db: &Db, cache: &Path, artist: &str, title: &str, duration: Option<f
         .collect();
     hits.sort_by_key(|p| (Path::new(p).starts_with(cache), !p.ends_with(".flac")));
     hits.into_iter().next()
+}
+
+/// A song you already own: same title and artist outside the cache, whatever its length.
+pub fn same_song(db: &Db, cache: &Path, artist: &str, title: &str) -> Option<String> {
+    let tn = norm(title);
+    if tn.is_empty() || artist.trim().is_empty() {
+        return None;
+    }
+    db.lib_by_title(&tn).ok()?.into_iter().find(|(p, a, _)| !Path::new(p).starts_with(cache) && artist_match(a, artist)).map(|h| h.0)
 }
 
 /// Where a newly cached track goes: `<Artist>/<Album>/<Title>.ext`, or `Non-Album/<Artist>/<Title>.ext`.
