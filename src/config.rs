@@ -13,6 +13,8 @@ pub struct Config {
     pub admin_token: String,
     /// yt-dlp binary used for downloads.
     pub ytdlp: PathBuf,
+    /// Interpreter that runs the yt-dlp script, so the data volume does not need to allow execution.
+    pub python: String,
     pub max_seconds: u32,
     pub concurrency: usize,
     pub max_queue: i64,
@@ -32,6 +34,7 @@ impl Config {
         let data = PathBuf::from(var("JAM_DATA", "/data".to_string()));
         Config {
             addr: var("JAM_ADDR", "0.0.0.0:8080".to_string()),
+            python: var("JAM_PYTHON", "python3".to_string()),
             ytdlp: std::env::var("JAM_YTDLP").map(PathBuf::from).unwrap_or_else(|_| data.join("bin/yt-dlp")),
             data,
             library: PathBuf::from(var("JAM_LIBRARY", "/music".to_string())),

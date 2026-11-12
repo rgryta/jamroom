@@ -8,7 +8,8 @@ use std::{process::Stdio, time::Duration};
 use tokio::process::Command;
 
 fn base(cfg: &Config) -> Command {
-    let mut c = Command::new(&cfg.ytdlp);
+    let mut c = Command::new(&cfg.python);
+    c.arg(&cfg.ytdlp);
     c.args(["--ignore-config", "--no-warnings", "--no-colors"])
         .env("XDG_CACHE_HOME", cfg.data.join("cache"))
         .env("HOME", &cfg.data)

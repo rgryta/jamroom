@@ -51,6 +51,7 @@ from `/admin` (needs `JAM_ADMIN_TOKEN`). `deploy/compose.yaml` is the homelab st
 | `JAM_DATA` | `/data` | database, yt-dlp copy, scratch space |
 | `JAM_LIBRARY` | `/music` | music library root (read and write) |
 | `JAM_ADMIN_TOKEN` | empty | enables the admin API when set |
+| `JAM_PYTHON` | `python3` | interpreter that runs the yt-dlp script (the data volume need not allow execution) |
 | `JAM_MAX_SECONDS` | `900` | longest track that is downloaded |
 | `JAM_CONCURRENCY` | `2` | parallel downloads |
 | `JAM_MAX_QUEUE` | `50` | tracks waiting per room |
