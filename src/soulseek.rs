@@ -329,26 +329,84 @@ pub struct Names {
     pub album: Option<String>,
 }
 
-/// Prefer what the file says about itself (Soulseek files are usually well tagged), but never
-/// the video-site title the request came with, and never a compilation album.
-pub fn choose_names(tags: &library::FileTags, wanted_artist: &str, wanted_title: &str) -> Names {
+/// An error message with this prefix means "this file is not the recording we want", not a fault.
+const NOT_THE_SONG: &str = "not the right recording: ";
+
+/// A title without video decoration and without a bracketed "feat." credit, for comparing two titles.
+fn bare_title(title: &str) -> String {
+    let t = tidy_title(title);
+    let mut out = String::new();
+    let mut rest = t.as_str();
+    while let Some(open) = rest.find(['(', '[']) {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        match after.find([')', ']']) {
+            Some(close) => {
+                let inner = after[..close].trim_start().to_lowercase();
+                if !(inner.starts_with("feat") || inner.starts_with("ft") || inner.starts_with("with")) {
+                    out.push_str(&rest[open..open + close + 2]);
+                }
+                rest = &after[close + 1..];
+            }
+            None => {
+                out.push_str(&rest[open..]);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    alnum(&out)
+}
+
+/// True when two artist credits share a name: "Cardi B & Bruno Mars" and "Bruno Mars, Cardi B".
+pub fn artists_overlap(a: &str, b: &str) -> bool {
+    let names = |s: &str| -> Vec<String> {
+        s.replace(" & ", ",")
+            .replace(" and ", ",")
+            .replace(" x ", ",")
+            .replace(" feat.", ",")
+            .replace(" ft.", ",")
+            .replace(" featuring ", ",")
+            .split([',', ';'])
+            .map(|n| n.trim().to_string())
+            .filter(|n| !n.is_empty())
+            .collect()
+    };
+    let (na, nb) = (names(a), names(b));
+    na.iter().any(|x| nb.iter().any(|y| artist_match(x, y))) || artist_match(a, b)
+}
+
+/// Decide how the downloaded file is named and tagged, or refuse it. The file's own tags are
+/// trusted for names (Soulseek files are usually well tagged) but never the video-site title the
+/// request came with, and never a compilation album. A file whose tags say it is another version
+/// ("(kwikMIX ...)", "(Intro Clean)") or another artist's song is refused.
+pub fn choose_names(tags: &library::FileTags, wanted_artist: &str, wanted_title: &str) -> Result<Names, String> {
     let wanted = tidy_title(wanted_title);
-    let title = tags
-        .title
-        .as_deref()
-        .map(tidy_title)
-        .filter(|t| {
-            let (a, b) = (alnum(t), alnum(&wanted));
-            a.chars().count() >= 3 && (b.starts_with(&a) || a.starts_with(&b))
-        })
-        .unwrap_or(wanted);
-    let artist = tags
-        .artist
-        .clone()
-        .filter(|a| !matches!(alnum(a).as_str(), "variousartists" | "various" | "va"))
-        .unwrap_or_else(|| wanted_artist.to_string());
+    let title = match tags.title.as_deref() {
+        Some(t) => {
+            let (have, want) = (bare_title(t), bare_title(&wanted));
+            if have == want || (have.chars().count() >= 3 && want.starts_with(&have)) {
+                tidy_title(t)
+            } else if have.starts_with(&want) {
+                return Err(format!("{NOT_THE_SONG}it is titled \"{t}\", a different version"));
+            } else {
+                wanted
+            }
+        }
+        None => wanted,
+    };
+    let tag_artist = tags.artist.clone().filter(|a| !matches!(alnum(a).as_str(), "variousartists" | "various" | "va"));
+    // A request whose artist came off a video ("Song (Spanish Version)") is not worth comparing against.
+    let junk_artist = wanted_artist.contains(['(', '[', '|']);
+    if let Some(a) = &tag_artist
+        && !junk_artist
+        && !artists_overlap(a, wanted_artist)
+    {
+        return Err(format!("{NOT_THE_SONG}it is by \"{a}\", not {wanted_artist}"));
+    }
+    let artist = tag_artist.unwrap_or_else(|| wanted_artist.to_string());
     let album = tags.album.clone().filter(|al| !looks_like_compilation(al, tags.album_artist.as_deref(), &artist));
-    Names { dir_artist: main_artist(&artist), artist, title, album }
+    Ok(Names { dir_artist: main_artist(&artist), artist, title, album })
 }
 
 /// Where slskd put a finished download: `<complete>/<folder name>/<file>`, or anywhere under it.
@@ -380,7 +438,7 @@ fn import(cfg: &Config, up: &Upgrade) -> Result<PathBuf> {
     let copy = tmp.join(src.file_name().ok_or_else(|| anyhow!("no file name"))?);
     let result = (|| {
         std::fs::copy(&src, &copy)?;
-        let names = choose_names(&library::read_tags(&copy), &up.artist, &up.title);
+        let names = choose_names(&library::read_tags(&copy), &up.artist, &up.title).map_err(|e| anyhow!(e))?;
         library::write_tags(&copy, &names.artist, &names.dir_artist, &names.title, names.album.as_deref(), None)?;
         if names.album.is_none() {
             library::clear_album(&copy)?;
@@ -429,6 +487,10 @@ async fn follow(cfg: &Config, db: &Db, sl: &Slskd, up: &Upgrade) -> Result<()> {
                     let n = db.apply_upgrade(&up.cached, &dest.to_string_lossy())?;
                     tracing::info!(path = %dest.display(), queued_songs = n, "upgraded from Soulseek");
                     settle(db, up, "done", &format!("from {}", up.peer))
+                }
+                Err(e) if e.to_string().starts_with(NOT_THE_SONG) => {
+                    tracing::info!(song = %up.title, reason = %e, "skipped a Soulseek download");
+                    settle(db, up, "none", &e.to_string())
                 }
                 Err(e) => {
                     tracing::warn!(song = %up.title, error = %e, "could not use the Soulseek download");
@@ -757,14 +819,14 @@ mod tests {
             album: Some("Summer Heat 2010".into()),
             album_artist: None,
         };
-        let n = choose_names(&tags, "Kato feat. Jon", "Turn The Lights Off (Jon Hamm)");
+        let n = choose_names(&tags, "Kato feat. Jon", "Turn The Lights Off (Jon Hamm)").unwrap();
         assert_eq!((n.dir_artist.as_str(), n.title.as_str(), n.album), ("Kato", "Turn The Lights Off", None));
         // A file with no tags falls back to the tidied request.
-        let n = choose_names(&library::FileTags::default(), "Hozier", "Too Sweet (Official Video)");
+        let n = choose_names(&library::FileTags::default(), "Hozier", "Too Sweet (Official Video)").unwrap();
         assert_eq!((n.artist.as_str(), n.title.as_str()), ("Hozier", "Too Sweet"));
-        // A wrong title tag is ignored; "Various Artists" is not an artist.
+        // "Various Artists" is not an artist; an unrelated title tag is ignored.
         let odd = library::FileTags { artist: Some("Various Artists".into()), title: Some("Other Song".into()), ..Default::default() };
-        let n = choose_names(&odd, "Hozier", "Too Sweet");
+        let n = choose_names(&odd, "Hozier", "Too Sweet").unwrap();
         assert_eq!((n.artist.as_str(), n.title.as_str()), ("Hozier", "Too Sweet"));
         // A real album is kept.
         let real = library::FileTags {
@@ -773,6 +835,30 @@ mod tests {
             album_artist: Some("Daft Punk".into()),
             ..Default::default()
         };
-        assert_eq!(choose_names(&real, "Daft Punk", "Around the World").album.as_deref(), Some("Homework"));
+        assert_eq!(choose_names(&real, "Daft Punk", "Around the World").unwrap().album.as_deref(), Some("Homework"));
+    }
+
+    #[test]
+    fn other_versions_and_other_artists_are_refused_but_credits_are_fine() {
+        let tagged =
+            |artist: &str, title: &str| library::FileTags { artist: Some(artist.into()), title: Some(title.into()), ..Default::default() };
+        // Found in the real library run: DJ edits and a different artist's song with the same name.
+        let dj = choose_names(&tagged("Jonas Brothers", "Sucker (kwikMIX by Stacy Mier)"), "Jonas Brothers", "Sucker (Official Video)");
+        assert!(dj.unwrap_err().starts_with(NOT_THE_SONG));
+        let intro = choose_names(
+            &tagged("Bruno Mars & Cardi B", "Please Me (Trayze My Boo Blend) (Intro Clean) 130"),
+            "Cardi B & Bruno Mars",
+            "Please Me",
+        );
+        assert!(intro.is_err());
+        let other = choose_names(&tagged("Living Scars", "Without Me"), "Halsey", "Without Me");
+        assert!(other.unwrap_err().contains("Living Scars"));
+        // The same duo credited the other way round, and a featured artist in the title, are fine.
+        assert!(choose_names(&tagged("Bruno Mars & Cardi B", "Please Me"), "Cardi B & Bruno Mars", "Please Me (Official Video)").is_ok());
+        let feat = choose_names(&tagged("Halsey", "Without Me (feat. Khalid)"), "Halsey", "Without Me").unwrap();
+        assert_eq!(feat.title, "Without Me (feat. Khalid)");
+        // A video-site artist name cannot be compared, so the file's own artist wins.
+        let ketchup = choose_names(&tagged("Las Ketchup", "Las Ketchup"), "Aserejé (The Ketchup Song) [Spanish Version]", "Las Ketchup");
+        assert_eq!(ketchup.unwrap().dir_artist, "Las Ketchup");
     }
 }
