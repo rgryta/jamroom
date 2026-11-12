@@ -1,4 +1,10 @@
-target/
+/target
+/target-*
 /data/
 *.db
 .env
+# No specs, plans or context notes in the repo; single-use scripts go in scripts/.
+/*-spec.md
+/*-context.md
+/docs/superpowers/
+__pycache__/

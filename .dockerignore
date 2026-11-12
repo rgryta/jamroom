@@ -1,6 +1,6 @@
-target/
-.git/
-.github/
-deploy/
-tests/
+target
+target-*
+.git
+.github
+deploy
 *.md
