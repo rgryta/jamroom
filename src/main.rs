@@ -62,6 +62,7 @@ async fn main() -> Result<()> {
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp)?;
     std::fs::create_dir_all(cfg.data.join("cache"))?;
+    std::fs::create_dir_all(&cfg.cache)?;
     ensure_ytdlp(&cfg)?;
 
     let db = Db::open(&cfg.data.join("jamroom.db"))?;
@@ -80,7 +81,7 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         loop {
             let a = scanner.clone();
-            match tokio::task::spawn_blocking(move || library::scan(&a.db, &a.cfg.library)).await {
+            match tokio::task::spawn_blocking(move || library::scan(&a.db, &[a.cfg.library.as_path(), a.cfg.cache.as_path()])).await {
                 Ok(Ok((files, gone))) => tracing::info!(files, gone, "library indexed"),
                 Ok(Err(e)) => tracing::warn!(error = %e, "library scan failed"),
                 Err(e) => tracing::warn!(error = %e, "library scan crashed"),
@@ -113,6 +114,12 @@ async fn main() -> Result<()> {
             match saver.db.backup_to(&dir.join(format!("jamroom-{day}.db"))) {
                 Ok(()) => tracing::info!(day, "database backed up"),
                 Err(e) => tracing::warn!(error = %e, "database backup failed"),
+            }
+            let pruner = saver.clone();
+            match tokio::task::spawn_blocking(move || library::prune(&pruner.db, &pruner.cfg.cache, pruner.cfg.cache_days)).await {
+                Ok(Ok(n)) if n > 0 => tracing::info!(removed = n, "old cached songs deleted"),
+                Ok(Err(e)) => tracing::warn!(error = %e, "cache cleanup failed"),
+                _ => {}
             }
             for old in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
                 let name = old.file_name().to_string_lossy().into_owned();

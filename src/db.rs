@@ -378,6 +378,14 @@ impl Db {
         Ok(())
     }
 
+    /// Files that songs still waiting to play depend on.
+    pub fn open_files(&self) -> Result<std::collections::HashSet<String>> {
+        let c = self.c();
+        let mut st = c.prepare("SELECT file FROM tracks WHERE file IS NOT NULL AND status IN ('queued','working','ready','playing')")?;
+        let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// A consistent copy of the whole database (rooms and queue), safe to take while the service runs.
     pub fn backup_to(&self, path: &Path) -> Result<()> {
         let _ = std::fs::remove_file(path);

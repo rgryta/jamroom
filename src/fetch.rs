@@ -37,7 +37,7 @@ async fn make_ready(app: &App, job: &Job) -> Result<()> {
     let id = job.id;
     let mut it = job.item.clone();
 
-    if let Some(p) = library::find(&app.db, &it.artist, &it.title, it.duration) {
+    if let Some(p) = library::find(&app.db, &app.cfg.cache, &it.artist, &it.title, it.duration) {
         return app.db.set_ready(id, &p, false);
     }
 
@@ -56,7 +56,7 @@ async fn make_ready(app: &App, job: &Job) -> Result<()> {
             it.album = cand.album.clone();
             it.duration = cand.duration;
             app.db.set_details(id, &it.artist, &it.title, it.album.as_deref())?;
-            if let Some(p) = library::find(&app.db, &it.artist, &it.title, it.duration) {
+            if let Some(p) = library::find(&app.db, &app.cfg.cache, &it.artist, &it.title, it.duration) {
                 return app.db.set_ready(id, &p, false);
             }
         }
@@ -91,8 +91,9 @@ async fn make_ready(app: &App, job: &Job) -> Result<()> {
         None => None,
     };
     let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("m4a").to_ascii_lowercase();
-    let dest = library::target_path(&app.cfg.library, &it.dir_artist, it.album.as_deref(), &it.title, &ext);
-    let root = app.cfg.library.clone();
+    // YouTube audio is 128 kbps AAC, so it stays in the cache and never reaches the music library.
+    let dest = library::target_path(&app.cfg.cache, &it.dir_artist, it.album.as_deref(), &it.title, &ext);
+    let root = app.cfg.cache.clone();
     let (tag_artist, tag_title, tag_album, dir_artist) = (it.artist.clone(), it.title.clone(), it.album.clone(), it.dir_artist.clone());
     let dest2 = dest.clone();
     if !dest.exists() {
@@ -101,9 +102,9 @@ async fn make_ready(app: &App, job: &Job) -> Result<()> {
             library::place(&file, &dest2, &root)
         })
         .await??;
-        tracing::info!(path = %dest.display(), "added to library");
+        tracing::info!(path = %dest.display(), "cached");
     }
-    if let Some(e) = library::read_entry(&dest, &app.cfg.library) {
+    if let Some(e) = library::read_entry(&dest, &app.cfg.cache) {
         app.db.lib_upsert(&e)?;
     }
     app.db.set_ready(id, &dest.to_string_lossy(), true)?;
@@ -165,7 +166,9 @@ mod tests {
         cfg.ytdlp = stub;
         cfg.data = dir.join("data");
         cfg.library = dir.join("lib");
+        cfg.cache = dir.join("cache");
         std::fs::create_dir_all(&cfg.library).unwrap();
+        std::fs::create_dir_all(&cfg.cache).unwrap();
         std::fs::create_dir_all(cfg.data.join("tmp")).unwrap();
         App::new(Arc::new(cfg), Db::memory().unwrap()).unwrap()
     }
@@ -190,8 +193,9 @@ mod tests {
         let (ra, rb) = tokio::join!(make_ready(&app, &ja), make_ready(&app, &jb));
         ra.unwrap();
         rb.unwrap();
-        let file = dir.path().join("lib/Artist/Album/Song.m4a");
+        let file = dir.path().join("cache/Artist/Album/Song.m4a");
         assert!(file.exists());
+        assert_eq!(std::fs::read_dir(dir.path().join("lib")).unwrap().count(), 0, "nothing from YouTube reaches the library");
         assert_eq!(app.db.track_file("r", a).unwrap().as_deref(), file.to_str());
         assert_eq!(app.db.track_file("r", b).unwrap().as_deref(), file.to_str());
         assert_eq!(std::fs::read_dir(file.parent().unwrap()).unwrap().count(), 1, "no .part files left behind");
@@ -204,7 +208,7 @@ mod tests {
         let first = app.db.add_track("r", &song()).unwrap();
         let job = app.db.next_job().unwrap().unwrap();
         make_ready(&app, &job).await.unwrap();
-        library::scan(&app.db, &app.cfg.library).unwrap();
+        library::scan(&app.db, &[&app.cfg.library, &app.cfg.cache]).unwrap();
         // Break the downloader: a second request must be served from the library.
         std::fs::remove_file(&app.cfg.ytdlp).unwrap();
         let second = app.db.add_track("r", &song()).unwrap();

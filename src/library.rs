@@ -84,13 +84,17 @@ pub fn read_entry(path: &Path, root: &Path) -> Option<LibEntry> {
 }
 
 /// Bring the index in line with the files on disk. Blocking; run it off the async runtime.
-pub fn scan(db: &Db, root: &Path) -> Result<(usize, usize)> {
+pub fn scan(db: &Db, roots: &[&Path]) -> Result<(usize, usize)> {
     let known = db.lib_known()?;
-    let mut files = Vec::new();
-    walk(root, &mut files);
-    let seen: HashSet<String> = files.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+    let mut files: Vec<(PathBuf, &Path)> = Vec::new();
+    for root in roots {
+        let mut found = Vec::new();
+        walk(root, &mut found);
+        files.extend(found.into_iter().map(|p| (p, *root)));
+    }
+    let seen: HashSet<String> = files.iter().map(|(p, _)| p.to_string_lossy().into_owned()).collect();
     let mut batch = Vec::new();
-    for p in &files {
+    for (p, root) in &files {
         let key = p.to_string_lossy();
         if known.get(key.as_ref()) == Some(&mtime(p)) {
             continue;
@@ -109,8 +113,9 @@ pub fn scan(db: &Db, root: &Path) -> Result<(usize, usize)> {
     Ok((files.len(), gone.len()))
 }
 
-/// A library file that already holds this track: same title, matching artist, length within 3 s.
-pub fn find(db: &Db, artist: &str, title: &str, duration: Option<f64>) -> Option<String> {
+/// A file that already holds this track: same title, matching artist, length within 3 s. A file
+/// outside the cache wins over a cached download, and FLAC wins over the rest.
+pub fn find(db: &Db, cache: &Path, artist: &str, title: &str, duration: Option<f64>) -> Option<String> {
     let tn = norm(title);
     if tn.is_empty() || artist.trim().is_empty() {
         return None;
@@ -128,7 +133,7 @@ pub fn find(db: &Db, artist: &str, title: &str, duration: Option<f64>) -> Option
         })
         .map(|h| h.0)
         .collect();
-    hits.sort_by_key(|p| !p.ends_with(".flac"));
+    hits.sort_by_key(|p| (Path::new(p).starts_with(cache), !p.ends_with(".flac")));
     hits.into_iter().next()
 }
 
@@ -139,6 +144,26 @@ pub fn target_path(root: &Path, dir_artist: &str, album: Option<&str>, title: &s
         Some(al) => root.join(sanitize(dir_artist)).join(sanitize(al)).join(file),
         None => root.join("Non-Album").join(sanitize(dir_artist)).join(file),
     }
+}
+
+/// Delete cached songs older than `days` that no waiting song needs, and the folders they leave empty.
+pub fn prune(db: &Db, cache: &Path, days: i64) -> Result<usize> {
+    let in_use = db.open_files()?;
+    let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(days.max(1) as u64 * 86_400);
+    let mut files = Vec::new();
+    walk(cache, &mut files);
+    let mut gone = 0;
+    for p in files {
+        let old = std::fs::metadata(&p).and_then(|m| m.modified()).is_ok_and(|t| t < cutoff);
+        if old && !in_use.contains(p.to_string_lossy().as_ref()) && std::fs::remove_file(&p).is_ok() {
+            gone += 1;
+            let mut dir = p.parent();
+            while let Some(d) = dir.filter(|d| *d != cache && std::fs::remove_dir(d).is_ok()) {
+                dir = d.parent();
+            }
+        }
+    }
+    Ok(gone)
 }
 
 pub fn probe_duration(path: &Path) -> Option<f64> {
@@ -254,10 +279,15 @@ mod tests {
         add("/m/a.mp3", "Gorillaz", 222.0);
         add("/m/b.flac", "Gorillaz", 223.0);
         add("/m/c.mp3", "Someone Else", 223.0);
-        assert_eq!(find(&db, "Gorillaz", "Feel Good Inc", Some(223.4)).as_deref(), Some("/m/b.flac"));
-        assert_eq!(find(&db, "Gorillaz", "Feel Good Inc", Some(240.0)), None);
-        assert_eq!(find(&db, "Gorillaz", "Feel Good Inc", None).as_deref(), Some("/m/b.flac"));
-        assert_eq!(find(&db, "", "Feel Good Inc", None), None);
+        let cache = Path::new("/cache");
+        assert_eq!(find(&db, cache, "Gorillaz", "Feel Good Inc", Some(223.4)).as_deref(), Some("/m/b.flac"));
+        assert_eq!(find(&db, cache, "Gorillaz", "Feel Good Inc", Some(240.0)), None);
+        assert_eq!(find(&db, cache, "Gorillaz", "Feel Good Inc", None).as_deref(), Some("/m/b.flac"));
+        assert_eq!(find(&db, cache, "", "Feel Good Inc", None), None);
+        // A cached download loses to a file outside the cache, even a lossy one.
+        add("/cache/Gorillaz/c.flac", "Gorillaz", 223.0);
+        assert_eq!(find(&db, cache, "Gorillaz", "Feel Good Inc", None).as_deref(), Some("/m/b.flac"));
+        assert_eq!(find(&db, Path::new("/m"), "Gorillaz", "Feel Good Inc", None).as_deref(), Some("/cache/Gorillaz/c.flac"));
     }
 
     #[test]
@@ -284,11 +314,40 @@ mod tests {
 
         // The scan indexes it, finds it again by name and length, and a rescan changes nothing.
         let db = Db::memory().unwrap();
-        assert_eq!(scan(&db, &root).unwrap(), (1, 0));
-        assert_eq!(find(&db, "Artist A", "A Title", Some(2.0)).as_deref(), dest.to_str());
-        assert_eq!(scan(&db, &root).unwrap(), (1, 0));
+        assert_eq!(scan(&db, &[&root]).unwrap(), (1, 0));
+        assert_eq!(find(&db, Path::new("/cache"), "Artist A", "A Title", Some(2.0)).as_deref(), dest.to_str());
+        assert_eq!(scan(&db, &[&root]).unwrap(), (1, 0));
         std::fs::remove_file(&dest).unwrap();
-        assert_eq!(scan(&db, &root).unwrap(), (0, 1));
+        assert_eq!(scan(&db, &[&root]).unwrap(), (0, 1));
+    }
+
+    #[test]
+    fn old_cached_songs_are_pruned_unless_someone_is_waiting_for_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("songs");
+        let touch = |rel: &str, days_old: u64| {
+            let p = cache.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            let f = std::fs::File::create(&p).unwrap();
+            f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(days_old * 86_400)).unwrap();
+            p
+        };
+        let stale = touch("Old/Album/stale.m4a", 90);
+        let queued = touch("Old/Album/queued.m4a", 90);
+        let fresh = touch("New/fresh.m4a", 1);
+        let db = Db::memory().unwrap();
+        let id = db
+            .add_track("r", &crate::db::NewTrack { artist: "A".into(), dir_artist: "A".into(), title: "T".into(), ..Default::default() })
+            .unwrap();
+        db.next_job().unwrap();
+        db.set_ready(id, queued.to_str().unwrap(), true).unwrap();
+        assert_eq!(prune(&db, &cache, 60).unwrap(), 1);
+        assert!(!stale.exists() && queued.exists() && fresh.exists());
+        // Once nothing waits for it, the old file goes too, and its emptied folders with it.
+        db.finish_track("r", id).unwrap();
+        db.remove("r", id).unwrap();
+        assert_eq!(prune(&db, &cache, 60).unwrap(), 1);
+        assert!(!cache.join("Old").exists() && cache.exists());
     }
 
     #[test]

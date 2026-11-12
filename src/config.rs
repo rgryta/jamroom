@@ -7,8 +7,12 @@ pub struct Config {
     pub addr: String,
     /// Holds the SQLite database, the yt-dlp copy and scratch downloads.
     pub data: PathBuf,
-    /// Music library root; cached tracks are written here.
+    /// The music library. jamroom reads it to reuse files you already have; it does not write YouTube downloads here.
     pub library: PathBuf,
+    /// Where downloaded songs are kept, outside the library, so only better sources reach the library.
+    pub cache: PathBuf,
+    /// Cached songs older than this many days are deleted unless they are still queued.
+    pub cache_days: i64,
     /// Bearer token for the room admin API. Empty disables the admin API.
     pub admin_token: String,
     /// yt-dlp binary used for downloads.
@@ -36,6 +40,8 @@ impl Config {
             addr: var("JAM_ADDR", "0.0.0.0:8080".to_string()),
             python: var("JAM_PYTHON", "python3".to_string()),
             ytdlp: std::env::var("JAM_YTDLP").map(PathBuf::from).unwrap_or_else(|_| data.join("bin/yt-dlp")),
+            cache: std::env::var("JAM_CACHE").map(PathBuf::from).unwrap_or_else(|_| data.join("songs")),
+            cache_days: var("JAM_CACHE_DAYS", 60),
             data,
             library: PathBuf::from(var("JAM_LIBRARY", "/music".to_string())),
             admin_token: var("JAM_ADMIN_TOKEN", String::new()),
