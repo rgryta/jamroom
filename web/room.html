@@ -106,6 +106,7 @@
 
   // The room clock: where the playing song is, advanced locally between polls.
   let clk = null;
+  let remembered = null;
   const tickBar = () => {
     const i = document.querySelector('#now .bar i'), times = document.querySelector('#now .times');
     if (!i || !clk) return;
@@ -119,6 +120,7 @@
   let last = '';
   const render = (s) => {
     sw.update(s.room);
+    if (remembered !== s.room.name) { Jam.rooms.remember(code, s.room.name); remembered = s.room.name; }
     clk = s.now && { pos: s.now.position, at: performance.now(), paused: s.now.paused, dur: s.now.duration };
     const json = JSON.stringify({ ...s, now: s.now && { ...s.now, position: 0 } });
     if (json === last) { tickBar(); return; }

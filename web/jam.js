@@ -177,8 +177,36 @@ window.Jam = (() => {
     return { node, update };
   };
 
+  // The rooms this browser has joined lately (newest first, at most eight), kept in this browser only.
+  const rooms = (() => {
+    const KEY = 'jam-rooms';
+    const read = () => {
+      try {
+        const v = JSON.parse(localStorage.getItem(KEY) || '[]');
+        return Array.isArray(v) ? v.filter((r) => r && typeof r.code === 'string' && typeof r.name === 'string') : [];
+      } catch (e) { return []; }
+    };
+    const write = (list) => { try { localStorage.setItem(KEY, JSON.stringify(list.slice(0, 8))); } catch (e) {} };
+    return {
+      list: read,
+      remember: (code, name) => write([{ code, name: name || code, at: Date.now() }, ...read().filter((r) => r.code !== code)]),
+      forget: (code) => write(read().filter((r) => r.code !== code)),
+    };
+  })();
+
+  // "5 min ago", "2 h ago", "yesterday".
+  const ago = (t) => {
+    const m = Math.round((Date.now() - t) / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return `${m} min ago`;
+    const h = Math.round(m / 60);
+    if (h < 24) return `${h} h ago`;
+    const d = Math.round(h / 24);
+    return d === 1 ? 'yesterday' : `${d} days ago`;
+  };
+
   const STATUS = { queued: 'Waiting', working: 'Fetching', ready: 'Ready', playing: 'Playing', played: 'Played', failed: 'Failed' };
   const chip = (t) => el('span', 'chip ' + (t.status === 'queued' ? '' : t.status), STATUS[t.status] || t.status);
 
-  return { el, sleeve, roomApi, clock, chip, every, onWake, switches };
+  return { el, sleeve, roomApi, clock, chip, every, onWake, switches, rooms, ago };
 })();

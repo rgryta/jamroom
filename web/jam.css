@@ -55,6 +55,11 @@ details.name summary { cursor: pointer; min-height: 32px; display: flex; align-i
 details.name label { display: block; margin-top: 8px; font-weight: 600; color: var(--ink); }
 details.name .field { margin-top: 6px; }
 
+/* recent rooms on the start page */
+.room-item { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
+.room-item .title { font-weight: 700; overflow-wrap: anywhere; }
+.room-item .sub { color: var(--mut); font-size: .875rem; overflow-wrap: anywhere; }
+
 /* Autoplay switch and mood panel */
 .switches { display: grid; gap: 10px; margin: 18px 0 0; }
 .switch { position: relative; display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 12px; align-items: center; min-height: 44px; cursor: pointer; }

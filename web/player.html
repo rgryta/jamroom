@@ -10,6 +10,9 @@
   .stage { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
   .gate { max-width: 520px; }
   .gate p { color: var(--mut); margin: 0 0 24px; max-width: 46ch; }
+  .gate .row { display: flex; flex-wrap: wrap; gap: 12px; }
+  .roomrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+  .roomrow .room { margin: 0; }
   .deck { width: min(1120px, 100%); display: grid; gap: 28px; grid-template-columns: minmax(0, 1fr); }
   @media (min-width: 860px) { .deck { grid-template-columns: minmax(300px, 440px) minmax(0, 1fr); gap: 48px; align-items: center; } }
   .art .sleeve { width: 100%; border-radius: 20px; box-shadow: 0 24px 60px -24px rgba(23, 23, 58, .5); }
@@ -32,13 +35,19 @@
   <section class="gate" id="gate">
     <h1>Start the player</h1>
     <p>Press once so this tab is allowed to play sound, then leave it open on the computer that&rsquo;s connected to the speakers. The screen stays awake while it plays. Every player in the room stays in time with the others.</p>
-    <button class="btn big" id="start">Start player</button>
+    <div class="row">
+      <button class="btn big" id="start">Start player</button>
+      <a class="btn ghost big" id="gate-room" href="#">Just add songs instead</a>
+    </div>
   </section>
 
   <section class="deck" id="deck" hidden>
     <div class="art" id="art"></div>
     <div>
-      <p class="room" id="roomname"></p>
+      <div class="roomrow">
+        <p class="room" id="roomname"></p>
+        <a class="btn ghost sm" id="to-room" href="#">Add songs</a>
+      </div>
       <h1 class="now-title"><mark class="hl" id="tt"></mark><span id="idle"></span></h1>
       <p class="artist" id="artist"></p>
       <p class="by" id="by"></p>
@@ -75,8 +84,12 @@
   const $ = (id) => document.getElementById(id);
   const a = $('a');
   const room = `${location.origin}/r/${code}`;
+  $('gate-room').href = `/r/${code}`; $('to-room').href = `/r/${code}`;
   $('join').href = room; $('join').textContent = room.replace(/^https?:\/\//, '');
 
+  let remembered = null;
+  // Opening the player counts as joining the room, even before Start is pressed.
+  api('/state').then((s) => { Jam.rooms.remember(code, s.room.name); remembered = s.room.name; }).catch(() => {});
   let started = false, cur = null, sync = null, seq = 0, applied = 0, last = '', dragging = false, lock = null, recovering = false;
 
   // Where the room says the song is right now, kept up to date between polls with the local clock.
@@ -110,6 +123,7 @@
 
   const show = (s, delay) => {
     sw.update(s.room);
+    if (remembered !== s.room.name) { Jam.rooms.remember(code, s.room.name); remembered = s.room.name; }
     const now = s.now;
     sync = now && { id: now.id, pos: now.position + (now.paused ? 0 : delay), at: performance.now(), paused: now.paused, dur: now.duration };
     if (now && now.id !== cur) {
@@ -174,7 +188,7 @@
   a.addEventListener('ended', skip);
   a.addEventListener('loadedmetadata', follow);
   a.addEventListener('canplay', () => { if (!recovering) say(''); follow(); });
-  a.addEventListener('waiting', () => say('Buffering…'));
+  a.addEventListener('waiting', () => { if (cur !== null) say('Buffering…'); });
   a.addEventListener('playing', () => say(''));
   // Paused by something other than the room (a browser hiccup, a Bluetooth blip): rejoin.
   a.addEventListener('pause', () => { if (sync && !sync.paused && !a.ended) setTimeout(follow, 400); });
