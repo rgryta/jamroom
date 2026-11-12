@@ -30,7 +30,8 @@ a { color: var(--act); }
 
 /* page frame */
 .top { display: flex; align-items: center; gap: 8px; max-width: 34rem; margin: 0 auto; padding: 12px 16px 0; }
-.mark { font: 700 var(--t3) var(--display); letter-spacing: -.03em; color: var(--ink); text-decoration: none; }
+.mark { display: inline-flex; align-items: center; gap: 8px; font: 700 1.125rem var(--display); letter-spacing: -.03em; color: var(--ink); text-decoration: none; }
+.mark svg { height: .8em; width: auto; color: var(--act); }
 .wrap { max-width: 34rem; margin: 0 auto; padding: 8px 16px 4rem; }
 .sec { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 28px 0 4px; }
 .count { color: var(--mut); font-weight: 400; }
