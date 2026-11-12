@@ -18,10 +18,23 @@ fn base(cfg: &Config) -> Command {
     c
 }
 
+/// The reason yt-dlp failed, in words a person in the room can act on. Known causes get a plain
+/// sentence; anything else keeps yt-dlp's own text. Keep each sentence short: failed songs show it in the queue.
 fn last_error(stderr: &[u8]) -> String {
     let text = String::from_utf8_lossy(stderr);
     let line = text.lines().rev().find(|l| l.contains("ERROR")).or_else(|| text.lines().next_back()).unwrap_or("failed");
-    line.trim().trim_start_matches("ERROR:").trim().chars().take(200).collect()
+    let line = line.trim().trim_start_matches("ERROR:").trim();
+    let low = line.to_ascii_lowercase();
+    let known = if low.contains("unavailable") || low.contains("not available") {
+        Some("that isn't available any more (removed, private or blocked where the server is). Try another link or type the song name")
+    } else if low.contains("sign in to confirm") {
+        Some("YouTube is blocking the server for now. Try again in a few minutes")
+    } else if low.contains("playlist type is unviewable") {
+        Some("YouTube mixes can't be opened as a list. Open one song and copy its link")
+    } else {
+        None
+    };
+    known.map_or_else(|| line.chars().take(200).collect(), String::from)
 }
 
 /// Run yt-dlp with `-J` and parse its JSON output.
@@ -63,7 +76,18 @@ mod tests {
     #[test]
     fn picks_the_error_line() {
         let s = b"[youtube] x: Downloading\nERROR: [youtube] x: Video unavailable\n";
-        assert_eq!(last_error(s), "[youtube] x: Video unavailable");
+        assert!(last_error(s).starts_with("that isn't available any more"));
         assert_eq!(last_error(b""), "failed");
+        assert_eq!(last_error(b"ERROR: [generic] something odd happened\n"), "[generic] something odd happened");
+    }
+
+    #[test]
+    fn known_causes_get_a_plain_sentence() {
+        let gone = last_error(b"ERROR: [youtube] VnCgmlxHXH0: This video is not available\n");
+        assert!(gone.contains("removed, private or blocked") && gone.contains("type the song name"));
+        assert!(last_error(b"ERROR: [youtube] x: Sign in to confirm you're not a bot\n").starts_with("YouTube is blocking"));
+        assert!(last_error(b"ERROR: [youtube:tab] RDx: YouTube said: This playlist type is unviewable.\n").contains("mixes"));
+        // Failed songs show this text in the queue, which cuts it at 160 characters.
+        assert!(gone.len() < 160);
     }
 }
