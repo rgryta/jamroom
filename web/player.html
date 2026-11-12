@@ -3,94 +3,221 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Jam player</title>
+<title>jamroom player</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2317173a'/%3E%3Crect x='6' y='13' width='20' height='8' rx='2' fill='%23ffd23f'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/jam.css">
 <style>
-  :root { color-scheme: dark light; --bg:#0f1115; --fg:#eceef2; --mut:#9aa3b2; --card:#1d2128; --acc:#6ea8fe; --line:#2c323c; }
-  @media (prefers-color-scheme: light) { :root { --bg:#f6f7f9; --fg:#14161a; --mut:#5b6575; --card:#fff; --acc:#2563eb; --line:#d9dee6; } }
-  * { box-sizing: border-box; }
-  body { margin:0; min-height:100vh; background:var(--bg); color:var(--fg); font:16px/1.4 system-ui, sans-serif; display:grid; place-items:center; padding:16px; text-align:center; }
-  main { width:100%; max-width:560px; }
-  #start { font:inherit; font-size:1.2rem; font-weight:600; padding:18px 32px; border:0; border-radius:14px; background:var(--acc); color:#fff; cursor:pointer; }
-  #cover { width:min(60vw, 280px); aspect-ratio:1; border-radius:14px; background:var(--line); object-fit:cover; margin:0 auto 16px; display:block; }
-  h1 { margin:0; font-size:1.5rem; } .artist { color:var(--mut); margin:4px 0 16px; }
-  audio { width:100%; margin:8px 0 16px; }
-  .next { color:var(--mut); font-size:.9rem; } .join { margin-top:20px; color:var(--mut); font-size:.9rem; }
-  a { color:var(--acc); }
-  [hidden] { display:none !important; }
+  .stage { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+  .gate { max-width: 520px; }
+  .gate p { color: var(--mut); margin: 0 0 24px; max-width: 46ch; }
+  .deck { width: min(1120px, 100%); display: grid; gap: 28px; grid-template-columns: minmax(0, 1fr); }
+  @media (min-width: 860px) { .deck { grid-template-columns: minmax(300px, 440px) minmax(0, 1fr); gap: 48px; align-items: center; } }
+  .art .sleeve { width: 100%; border-radius: 20px; box-shadow: 0 24px 60px -24px rgba(23, 23, 58, .5); }
+  .room { color: var(--mut); font-weight: 600; margin: 0 0 6px; }
+  .now-title { font: 800 clamp(2rem, 5.5vw, 4.25rem)/1.15 var(--display); letter-spacing: -.035em; margin: 0 0 10px; overflow-wrap: anywhere; }
+  .artist { font-size: clamp(1.125rem, 2.2vw, 1.5rem); color: var(--mut); margin: 0; }
+  .by { color: var(--mut); font-size: .9375rem; margin: 4px 0 0; }
+  .transport { display: flex; gap: 12px; align-items: center; margin: 24px 0 12px; flex-wrap: wrap; }
+  .seek { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; font-variant-numeric: tabular-nums; color: var(--mut); }
+  .seek input { width: 100%; accent-color: var(--act); height: 28px; }
+  .status { min-height: 1.5em; margin: 8px 0 0; color: var(--mut); font-weight: 600; }
+  .status.err { color: var(--bad); }
+  .upnext .track { grid-template-columns: 48px minmax(0, 1fr) auto; }
+  .join { margin-top: 28px; color: var(--mut); display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+  .join a { font-weight: 700; word-break: break-all; }
 </style>
 </head>
 <body>
-<main>
-  <button id="start">Start the player</button>
-  <section id="deck" hidden>
-    <img id="cover" alt="" hidden>
-    <h1 id="title">Waiting for songs</h1>
-    <div class="artist" id="artist"></div>
-    <audio id="a" controls></audio>
-    <div class="next" id="next"></div>
-    <div class="join">Add songs at <a id="join" href="#"></a></div>
+<main class="stage">
+  <section class="gate" id="gate">
+    <h1>Start the player</h1>
+    <p>Press once so this tab is allowed to play sound, then leave it open on the computer that&rsquo;s connected to the speakers. The screen stays awake while it plays. Every player in the room stays in time with the others.</p>
+    <button class="btn big" id="start">Start player</button>
+  </section>
+
+  <section class="deck" id="deck" hidden>
+    <div class="art" id="art"></div>
+    <div>
+      <p class="room" id="roomname"></p>
+      <h1 class="now-title"><mark class="hl" id="tt"></mark><span id="idle"></span></h1>
+      <p class="artist" id="artist"></p>
+      <p class="by" id="by"></p>
+
+      <div class="transport">
+        <button class="btn big" id="pp" disabled>Pause</button>
+        <button class="btn ghost big" id="skip" disabled>Skip</button>
+        <button class="btn ghost big" id="tap" hidden>Tap to hear it</button>
+      </div>
+      <div class="seek">
+        <span id="t0">0:00</span>
+        <input type="range" id="seek" min="0" max="1000" value="0" aria-label="Seek" disabled>
+        <span id="t1">0:00</span>
+      </div>
+      <p class="status" id="net" role="status" aria-live="polite"></p>
+
+      <div class="upnext">
+        <h2>Up next</h2>
+        <ol class="list" id="next"></ol>
+      </div>
+      <p class="join">Add songs at <a id="join" href="#"></a> <button class="btn ghost sm" id="copy" type="button">Copy link</button></p>
+    </div>
   </section>
 </main>
+<audio id="a" preload="auto"></audio>
+<script src="/assets/jam.js"></script>
 <script>
-(function () {
-  var code = location.pathname.split('/')[2];
-  var $ = function (id) { return document.getElementById(id); };
-  var a = $('a'), started = false, cur = null, busy = false;
-  var room = location.origin + '/r/' + code;
+(() => {
+  const { el, sleeve, roomApi, clock, chip } = Jam;
+  const code = location.pathname.split('/')[2];
+  const api = roomApi(code);
+  const $ = (id) => document.getElementById(id);
+  const a = $('a');
+  const room = `${location.origin}/r/${code}`;
   $('join').href = room; $('join').textContent = room.replace(/^https?:\/\//, '');
 
-  function api(path, method) {
-    return fetch('/api/r/' + code + path, { method: method || 'GET' }).then(function (r) {
-      if (!r.ok) throw new Error(r.statusText);
-      return r.json();
+  let started = false, cur = null, sync = null, seq = 0, applied = 0, last = '', dragging = false, lock = null, recovering = false;
+
+  // Where the room says the song is right now, kept up to date between polls with the local clock.
+  const expected = () => (!sync ? 0 : sync.paused ? sync.pos : sync.pos + (performance.now() - sync.at) / 1000);
+  const length = () => (Number.isFinite(a.duration) && a.duration > 0 ? a.duration : (sync && sync.dur) || 0);
+  const mediaUrl = () => `/media/${code}/${cur}`;
+  const say = (text, bad) => { $('net').textContent = text; $('net').className = 'status' + (bad ? ' err' : ''); };
+
+  // Bring this device in line with the room: same song, same spot, playing or paused like everyone else.
+  const follow = () => {
+    if (!sync || cur === null || !started) return;
+    const want = expected();
+    if (a.readyState >= 1 && !a.seeking && Math.abs(a.currentTime - want) > (sync.paused ? 0.3 : 0.8) && (!length() || want < length())) a.currentTime = want;
+    if (sync.paused) { if (!a.paused) a.pause(); }
+    else if (a.paused && !a.ended) a.play().then(() => { $('tap').hidden = true; }).catch(() => { $('tap').hidden = false; });
+  };
+
+  const upNext = (s) => {
+    const list = $('next'); list.textContent = '';
+    const up = s.queue.filter((t) => !s.now || t.id !== s.now.id);
+    if (!up.length) { list.append(el('li', 'empty', 'Nothing queued. Add a song from your phone.')); return; }
+    up.slice(0, 5).forEach((t) => {
+      const li = el('li', 'track');
+      const mid = el('div');
+      mid.append(el('div', 'title', t.title), el('div', 'sub', t.artist));
+      li.append(sleeve(t), mid, chip(t));
+      list.append(li);
     });
-  }
-  function show(s) {
-    var now = s.now;
-    if (now) {
-      if (now.id !== cur) {
-        cur = now.id;
-        a.src = '/media/' + code + '/' + now.id;
-        if (started) a.play().catch(function () {});
-        if ('mediaSession' in navigator) navigator.mediaSession.metadata = new MediaMetadata({ title: now.title, artist: now.artist, album: now.album || '' });
+    if (up.length > 5) list.append(el('li', 'sub', `and ${up.length - 5} more`));
+  };
+
+  const show = (s, delay) => {
+    const now = s.now;
+    sync = now && { id: now.id, pos: now.position + (now.paused ? 0 : delay), at: performance.now(), paused: now.paused, dur: now.duration };
+    if (now && now.id !== cur) {
+      cur = now.id;
+      a.src = mediaUrl();
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: now.title, artist: now.artist, album: now.album || '',
+          artwork: now.cover ? [{ src: now.cover }] : [],
+        });
       }
-      $('title').textContent = now.title;
-      $('artist').textContent = now.artist + (now.added_by ? ' · added by ' + now.added_by : '');
-      if (now.cover) { $('cover').src = now.cover; $('cover').hidden = false; } else $('cover').hidden = true;
-    } else {
-      if (cur !== null) { cur = null; a.pause(); a.removeAttribute('src'); a.load(); }
-      $('title').textContent = s.queue.length ? 'Getting the next song ready…' : 'Waiting for songs';
-      $('artist').textContent = ''; $('cover').hidden = true;
+    } else if (!now && cur !== null) {
+      cur = null; a.pause(); a.removeAttribute('src'); a.load();
     }
-    var up = s.queue.filter(function (t) { return !now || t.id !== now.id; });
-    $('next').textContent = up.length ? 'Up next: ' + up[0].title + (up.length > 1 ? ' (+' + (up.length - 1) + ' more)' : '') : '';
-  }
-  function tick() {
-    if (busy) return; busy = true;
-    api('/state').then(function (s) { return !s.now && s.queue.length ? api('/advance', 'POST') : s; })
-      .then(show).catch(function () {}).then(function () { busy = false; });
-  }
-  // Always say which track finished, so a late "ended" cannot end the track that replaced it.
-  function advance(id) { var done = id !== null ? '?done=' + id : ''; return api('/next' + done, 'POST').then(show).catch(function () {}); }
-  a.addEventListener('ended', function () { advance(cur); });
-  // A network blip should not cost the whole song: reload it once at the same spot, then give up and skip.
-  var retried = null;
-  a.addEventListener('error', function () {
-    if (cur === null) return;
-    var failed = cur, at = a.currentTime, first = retried !== failed;
-    retried = failed;
-    setTimeout(function () {
-      if (cur !== failed) return;
-      if (!first) { advance(failed); return; }
-      a.src = '/media/' + code + '/' + failed; a.currentTime = at;
-      if (started) a.play().catch(function () {});
-    }, 1500);
+    const key = JSON.stringify({ r: s.room, n: now && { ...now, position: 0 }, q: s.queue.map((t) => [t.id, t.status]) });
+    if (key !== last) {
+      last = key;
+      $('roomname').textContent = s.room.name;
+      document.title = now ? `${now.title} · jamroom` : 'jamroom player';
+      $('tt').textContent = now ? now.title : '';
+      $('idle').textContent = now ? '' : s.queue.length ? 'Getting the next song ready…' : 'Waiting for songs';
+      $('artist').textContent = now ? now.artist : '';
+      $('by').textContent = now && now.added_by ? `added by ${now.added_by}` : '';
+      $('art').textContent = '';
+      $('art').append(sleeve(now || { title: 'jamroom', artist: '' }));
+      upNext(s);
+    }
+    $('pp').disabled = $('skip').disabled = $('seek').disabled = !now;
+    $('pp').textContent = now && now.paused ? 'Play' : 'Pause';
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = !now ? 'none' : now.paused ? 'paused' : 'playing';
+    follow();
+  };
+
+  // Every call goes through here. An answer that arrives after a newer one is dropped, so a slow
+  // reply can never put the player back on a song that has already moved on.
+  const run = async (path, method) => {
+    const mine = ++seq, t0 = performance.now();
+    try {
+      const s = await api(path, method);
+      if (recovering) { recovering = false; say(''); }
+      if (mine < applied) return s;
+      applied = mine;
+      show(s, (performance.now() - t0) / 2000);
+      return s;
+    } catch (e) {
+      say('Can’t reach the server. Playing on and catching up when it’s back.', true);
+      recovering = true;
+    }
+  };
+
+  const poll = async () => {
+    const s = await run('/state');
+    if (s && !s.now && s.queue.length) await run('/advance', 'POST');
+  };
+
+  const skip = () => { if (cur !== null) run(`/next?done=${cur}`, 'POST'); };
+  const toggle = () => { if (sync) run(sync.paused ? '/resume' : '/pause', 'POST'); };
+
+  a.addEventListener('ended', skip);
+  a.addEventListener('loadedmetadata', follow);
+  a.addEventListener('canplay', () => { if (!recovering) say(''); follow(); });
+  a.addEventListener('waiting', () => say('Buffering…'));
+  a.addEventListener('playing', () => say(''));
+  // Paused by something other than the room (a browser hiccup, a Bluetooth blip): rejoin.
+  a.addEventListener('pause', () => { if (sync && !sync.paused && !a.ended) setTimeout(follow, 400); });
+  a.addEventListener('error', async () => {
+    const failed = cur;
+    if (failed === null) return;
+    await new Promise((r) => setTimeout(r, 1500));
+    if (cur !== failed) return;
+    let gone = false;
+    try { gone = (await fetch(mediaUrl(), { method: 'HEAD' })).status === 404; } catch (e) {}
+    if (gone) { say('That song is no longer available. Skipping.', true); skip(); return; }
+    say('Connection lost. Trying again…', true);
+    a.src = mediaUrl();
+  });
+  a.addEventListener('timeupdate', () => {
+    $('t0').textContent = clock(a.currentTime);
+    $('t1').textContent = length() ? `-${clock(length() - a.currentTime)}` : '';
+    if (!dragging && length()) $('seek').value = Math.round((a.currentTime / length()) * 1000);
   });
 
-  $('start').addEventListener('click', function () {
-    started = true; $('start').hidden = true; $('deck').hidden = false;
-    a.play().catch(function () {});   // unlocks audio for the rest of the session
-    tick(); setInterval(tick, 2000);
+  $('seek').addEventListener('input', () => { dragging = true; $('t0').textContent = clock(($('seek').value / 1000) * length()); });
+  $('seek').addEventListener('change', () => { dragging = false; run(`/seek?to=${(($('seek').value / 1000) * length()).toFixed(2)}`, 'POST'); });
+  $('pp').addEventListener('click', toggle);
+  $('skip').addEventListener('click', skip);
+  $('tap').addEventListener('click', follow);
+  $('copy').addEventListener('click', () => {
+    navigator.clipboard.writeText(room).then(() => { $('copy').textContent = 'Copied'; setTimeout(() => { $('copy').textContent = 'Copy link'; }, 2000); }).catch(() => {});
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' && started && !/^(INPUT|BUTTON|A)$/.test(document.activeElement.tagName)) { e.preventDefault(); toggle(); }
+  });
+
+  // Keeps the screen (and so the computer) awake; the browser drops the lock when the tab is hidden.
+  const keepAwake = async () => { try { lock = await navigator.wakeLock.request('screen'); } catch (e) {} };
+  document.addEventListener('visibilitychange', () => { if (started && document.visibilityState === 'visible') { keepAwake(); follow(); } });
+
+  if ('mediaSession' in navigator) {
+    const on = (name, fn) => { try { navigator.mediaSession.setActionHandler(name, fn); } catch (e) {} };
+    on('play', () => run('/resume', 'POST'));
+    on('pause', () => run('/pause', 'POST'));
+    on('nexttrack', skip);
+    on('seekto', (d) => run(`/seek?to=${d.seekTime}`, 'POST'));
+  }
+
+  $('start').addEventListener('click', () => {
+    started = true; $('gate').hidden = true; $('deck').hidden = false;
+    a.play().catch(() => {});   // unlocks sound for the rest of the session
+    keepAwake();
+    poll(); setInterval(poll, 1500);
   });
 })();
 </script>

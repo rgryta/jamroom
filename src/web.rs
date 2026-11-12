@@ -5,7 +5,7 @@ use anyhow::Result;
 use axum::{
     Json, Router,
     extract::{ConnectInfo, Path, Query, Request, State},
-    http::{HeaderMap, HeaderValue, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::{delete, get, post},
@@ -45,6 +45,11 @@ pub fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/", get(|| async { Html(include_str!("../web/index.html")) }))
         .route("/healthz", get(|| async { "ok" }))
+        .route("/assets/jam.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], include_str!("../web/jam.css")) }))
+        .route(
+            "/assets/jam.js",
+            get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../web/jam.js")) }),
+        )
         .route("/admin", get(|| async { Html(include_str!("../web/admin.html")) }))
         .route("/r/{code}", get(room_page))
         .route("/r/{code}/player", get(player_page))
@@ -52,6 +57,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/r/{code}/add", post(add))
         .route("/api/r/{code}/advance", post(advance))
         .route("/api/r/{code}/next", post(next))
+        .route("/api/r/{code}/pause", post(pause))
+        .route("/api/r/{code}/resume", post(resume))
+        .route("/api/r/{code}/seek", post(seek))
         .route("/api/r/{code}/remove/{id}", post(remove))
         .route("/media/{code}/{id}", get(media))
         .route("/api/admin/rooms", get(admin_list).post(admin_create))
@@ -156,8 +164,12 @@ async fn add(
     if open >= app.cfg.max_queue {
         return Err(ApiError::new(StatusCode::CONFLICT, "the queue is full"));
     }
-    let mut tracks =
-        app.resolver.resolve(&req.input, clean_name(req.name)).await.map_err(|e| ApiError(StatusCode::BAD_REQUEST, e.to_string()))?;
+    let mut tracks = app.resolver.resolve(&req.input, clean_name(req.name)).await.map_err(|e| {
+        // Refused adds are the only way to learn why someone could not add a song.
+        let typed: String = req.input.chars().take(120).collect();
+        tracing::info!(%ip, input = %typed, reason = %e, "add refused");
+        ApiError(StatusCode::BAD_REQUEST, e.to_string())
+    })?;
     tracks.truncate((app.cfg.max_queue - open) as usize);
     for t in &tracks {
         app.db.add_track(&room.code, t)?;
@@ -190,6 +202,35 @@ async fn next(
         app.db.finish_track(&room.code, id)?;
     }
     app.db.claim_next(&room.code)?;
+    state_json(&app, &room)
+}
+
+async fn pause(State(app): Shared, ConnectInfo(a): Client, h: HeaderMap, Path(code): Path<String>) -> Result<Json<Value>, ApiError> {
+    let room = live_room(&app, &client_ip(&h, a), &code)?;
+    app.db.set_paused(&room.code, true)?;
+    state_json(&app, &room)
+}
+
+async fn resume(State(app): Shared, ConnectInfo(a): Client, h: HeaderMap, Path(code): Path<String>) -> Result<Json<Value>, ApiError> {
+    let room = live_room(&app, &client_ip(&h, a), &code)?;
+    app.db.set_paused(&room.code, false)?;
+    state_json(&app, &room)
+}
+
+#[derive(Deserialize)]
+struct SeekQuery {
+    to: f64,
+}
+
+async fn seek(
+    State(app): Shared,
+    ConnectInfo(a): Client,
+    h: HeaderMap,
+    Path(code): Path<String>,
+    Query(q): Query<SeekQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let room = live_room(&app, &client_ip(&h, a), &code)?;
+    app.db.seek(&room.code, q.to)?;
     state_json(&app, &room)
 }
 
@@ -363,6 +404,26 @@ mod tests {
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert!(v["now"].is_null());
         assert_eq!(v["recent"][0]["status"], "played");
+    }
+
+    #[tokio::test]
+    async fn every_player_follows_one_clock_and_the_shared_files_are_served() {
+        let (app, r) = app_with_room();
+        let new = NewTrack { artist: "A".into(), dir_artist: "A".into(), title: "T".into(), ..Default::default() };
+        let id = app.db.add_track("room1", &new).unwrap();
+        app.db.next_job().unwrap();
+        app.db.set_ready(id, "/x/t.m4a", false).unwrap();
+        call(&r, "POST", "/api/r/room1/advance", false, None).await;
+        let now = |body: &[u8]| serde_json::from_slice::<Value>(body).unwrap()["now"].clone();
+        let (_, b) = call(&r, "POST", "/api/r/room1/seek?to=42", false, None).await;
+        assert!((42.0..43.0).contains(&now(&b)["position"].as_f64().unwrap()) && now(&b)["paused"] == false);
+        let (_, b) = call(&r, "POST", "/api/r/room1/pause", false, None).await;
+        assert_eq!(now(&b)["paused"], true);
+        let (_, b) = call(&r, "POST", "/api/r/room1/resume", false, None).await;
+        assert_eq!(now(&b)["paused"], false);
+        assert_eq!(call(&r, "POST", "/api/r/nope/pause", false, None).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(call(&r, "GET", "/assets/jam.css", false, None).await.0, StatusCode::OK);
+        assert_eq!(call(&r, "GET", "/assets/jam.js", false, None).await.0, StatusCode::OK);
     }
 
     #[tokio::test]

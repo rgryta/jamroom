@@ -3,103 +3,159 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Jam</title>
-<style>
-  :root { color-scheme: dark light; --bg:#14161a; --fg:#eceef2; --mut:#9aa3b2; --card:#1d2128; --acc:#6ea8fe; --line:#2c323c; --bad:#ff7b7b; --ok:#6bd68b; }
-  @media (prefers-color-scheme: light) { :root { --bg:#f6f7f9; --fg:#14161a; --mut:#5b6575; --card:#fff; --acc:#2563eb; --line:#d9dee6; --bad:#c0392b; --ok:#1f8a4c; } }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.4 system-ui, sans-serif; }
-  main { max-width:640px; margin:0 auto; padding:16px; }
-  header { display:flex; justify-content:space-between; align-items:baseline; gap:12px; margin-bottom:12px; }
-  h1 { margin:0; font-size:1.4rem; } h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em; color:var(--mut); margin:24px 0 8px; }
-  a { color:var(--acc); }
-  form { display:grid; gap:8px; }
-  .row { display:grid; grid-template-columns:1fr 130px; gap:8px; }
-  input, button { font:inherit; padding:12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--fg); min-width:0; }
-  button.go { background:var(--acc); color:#fff; border:0; font-weight:600; cursor:pointer; }
-  button:disabled { opacity:.6; }
-  #msg { min-height:1.4em; margin:8px 0 0; color:var(--mut); } #msg.err { color:var(--bad); } #msg.ok { color:var(--ok); }
-  ul, ol { list-style:none; margin:0; padding:0; display:grid; gap:8px; }
-  li { display:grid; grid-template-columns:48px 1fr auto; gap:12px; align-items:center; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:8px 12px 8px 8px; }
-  .art { width:48px; height:48px; border-radius:8px; background:var(--line); object-fit:cover; }
-  .t { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .s { color:var(--mut); font-size:.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .now { border-color:var(--acc); }
-  .x { padding:6px 10px; cursor:pointer; line-height:1; }
-  .chip { font-size:.75rem; color:var(--mut); }
-  .empty { color:var(--mut); }
-</style>
+<title>jamroom</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2317173a'/%3E%3Crect x='6' y='13' width='20' height='8' rx='2' fill='%23ffd23f'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/jam.css">
 </head>
 <body>
-<main>
-  <header><h1 id="room">Jam</h1><a id="player" href="#">Open the player</a></header>
+<header class="top">
+  <a class="mark" href="/">jam<mark class="hl">room</mark></a>
+  <a class="btn ghost sm" id="player" href="#">Open the player</a>
+</header>
+<main class="wrap">
+  <h1 id="room">Jam</h1>
+
   <form id="f">
-    <input id="in" placeholder="Paste a YouTube, SoundCloud, Spotify or Tidal link, or type a song" autocomplete="off" required>
-    <div class="row"><input id="nm" placeholder="Your name (optional)" maxlength="40" autocomplete="off"><button class="go" id="add">Add</button></div>
+    <label class="lbl" for="in">Add a song</label>
+    <div class="addrow">
+      <input class="field" id="in" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send" placeholder="Paste a link or type a song name" aria-describedby="hint" required>
+      <button class="btn" id="add">Add</button>
+    </div>
+    <p class="hint" id="hint">Links from YouTube, SoundCloud, Spotify or Tidal, or just the artist and title.</p>
+    <details class="name">
+      <summary id="who">Add your name</summary>
+      <label>Your name <span class="count">(optional, shown next to your songs)</span>
+        <input class="field" id="nm" maxlength="40" autocomplete="nickname">
+      </label>
+    </details>
+    <p class="msg" id="msg" role="status" aria-live="polite"></p>
   </form>
-  <p id="msg" role="status"></p>
-  <h2>Now playing</h2><ul id="now"></ul>
-  <h2>Up next</h2><ol id="q"></ol>
-  <h2>Recently</h2><ul id="recent"></ul>
+
+  <section aria-labelledby="h-now">
+    <h2 id="h-now">Now playing</h2>
+    <div id="now"></div>
+  </section>
+  <section aria-labelledby="h-q">
+    <h2 id="h-q">Up next <span class="count" id="qn"></span></h2>
+    <ol class="list" id="q"></ol>
+  </section>
+  <details class="recent">
+    <summary>Played recently</summary>
+    <ul class="list" id="recent"></ul>
+  </details>
 </main>
+<script src="/assets/jam.js"></script>
 <script>
-(function () {
-  var code = location.pathname.split('/')[2];
-  var $ = function (id) { return document.getElementById(id); };
-  $('player').href = '/r/' + code + '/player';
+(() => {
+  const { el, sleeve, chip } = Jam;
+  const code = location.pathname.split('/')[2];
+  const api = Jam.roomApi(code);
+  const $ = (id) => document.getElementById(id);
+  $('player').href = `/r/${code}/player`;
+
+  const say = (text, cls) => { $('msg').textContent = text; $('msg').className = 'msg ' + (cls || ''); };
+  const showName = () => { $('who').textContent = $('nm').value.trim() ? `Adding as ${$('nm').value.trim()}` : 'Add your name'; };
   try { $('nm').value = localStorage.getItem('jam-name') || ''; } catch (e) {}
+  showName();
+  $('nm').addEventListener('input', showName);
 
-  function api(path, opts) {
-    return fetch('/api/r/' + code + path, opts).then(function (r) {
-      return r.json().catch(function () { return {}; }).then(function (j) {
-        if (!r.ok) throw new Error(j.error || r.statusText);
-        return j;
-      });
+  // One queue row. `now` is the song playing, `done` a finished one.
+  const row = (t, kind) => {
+    const li = el('li', 'track' + (kind ? ' ' + kind : ''));
+    const mid = el('div');
+    const title = el('div', 'title');
+    if (kind === 'now') title.append(el('mark', 'hl', t.title)); else title.textContent = t.title;
+    mid.append(title, el('div', 'sub', [t.artist, t.added_by && `added by ${t.added_by}`].filter(Boolean).join(' · ')));
+    if (kind === 'now') {
+      const bar = el('div', 'bar'); bar.append(el('i'));
+      mid.append(bar, el('div', 'sub times'));
+    } else if (kind !== 'done' || t.status === 'failed') mid.append(chip(t));
+    if (t.status === 'failed' && t.error) mid.append(el('div', 'sub', t.error));
+    li.append(sleeve(t), mid);
+    if (kind === 'done') { li.append(el('span')); return li; }
+
+    const acts = el('div', 'acts');
+    const fail = (e) => say(e.message, 'err');
+    if (kind === 'now') {
+      const p = el('button', 'btn ghost sm', t.paused ? 'Resume' : 'Pause');
+      p.type = 'button';
+      p.addEventListener('click', () => api(t.paused ? '/resume' : '/pause', 'POST').then(render).catch(fail));
+      acts.append(p);
+    }
+    const b = el('button', 'btn ghost sm', t.status === 'playing' ? 'Skip' : 'Remove');
+    b.type = 'button';
+    b.setAttribute('aria-label', `${t.status === 'playing' ? 'Skip' : 'Remove'} ${t.title}`);
+    // Skipping cuts the song for everyone, so it takes a second tap.
+    let armed = false;
+    b.addEventListener('click', () => {
+      if (kind === 'now' && !armed) {
+        armed = true; b.textContent = 'Tap again to skip';
+        setTimeout(() => { armed = false; b.textContent = 'Skip'; }, 3000);
+        return;
+      }
+      api(`/remove/${t.id}`, 'POST').then(render).catch(fail);
     });
-  }
-  function say(text, cls) { $('msg').textContent = text; $('msg').className = cls || ''; }
-  function node(tag, cls, text) { var n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
-
-  var LABEL = { queued: 'waiting', working: 'fetching…', ready: 'ready', playing: 'playing', played: 'played', failed: 'failed' };
-  function item(t, canRemove, cls) {
-    var li = node('li', cls);
-    var art = node('img', 'art'); art.alt = ''; if (t.cover) art.src = t.cover; else art.style.visibility = 'hidden';
-    var mid = node('div'); mid.appendChild(node('div', 't', t.title));
-    var who = [t.artist, t.added_by ? 'added by ' + t.added_by : ''].filter(Boolean).join(' · ');
-    mid.appendChild(node('div', 's', who));
-    var chip = t.status === 'failed' ? (t.error || 'failed') : LABEL[t.status] || t.status;
-    mid.appendChild(node('div', 'chip', chip));
-    li.appendChild(art); li.appendChild(mid);
-    if (canRemove) {
-      var b = node('button', 'x', t.status === 'playing' ? 'Skip' : '✕'); b.title = t.status === 'playing' ? 'Skip' : 'Remove';
-      b.addEventListener('click', function () { api('/remove/' + t.id, { method: 'POST' }).then(render).catch(function (e) { say(e.message, 'err'); }); });
-      li.appendChild(b);
-    } else li.appendChild(node('span'));
+    acts.append(b);
+    li.append(acts);
     return li;
-  }
-  function fill(list, items, empty, canRemove, cls) {
-    list.textContent = '';
-    if (!items.length) { var li = node('li', 'empty', empty); li.style.display = 'block'; list.appendChild(li); return; }
-    items.forEach(function (t) { list.appendChild(item(t, canRemove, cls)); });
-  }
-  function render(s) {
-    $('room').textContent = s.room.name; document.title = s.room.name + ' · Jam';
-    fill($('now'), s.now ? [s.now] : [], 'Nothing playing. Open the player on the laptop that has the speakers.', true, 'now');
-    fill($('q'), s.queue, 'The queue is empty.', true);
-    fill($('recent'), s.recent, 'Nothing yet.', false);
-  }
-  function load() { return api('/state').then(render).catch(function (e) { say(e.message, 'err'); }); }
+  };
 
-  $('f').addEventListener('submit', function (e) {
+  const empty = (...parts) => { const d = el('div', 'empty'); d.append(...parts); return d; };
+
+  // The room clock: where the playing song is, advanced locally between polls.
+  let clk = null;
+  const tickBar = () => {
+    const i = document.querySelector('#now .bar i'), times = document.querySelector('#now .times');
+    if (!i || !clk) return;
+    const pos = clk.paused ? clk.pos : clk.pos + (performance.now() - clk.at) / 1000;
+    const shown = clk.dur ? Math.min(pos, clk.dur) : pos;
+    i.style.width = clk.dur ? `${Math.min(100, (shown / clk.dur) * 100)}%` : '0';
+    times.textContent = clk.dur ? `${Jam.clock(shown)} / ${Jam.clock(clk.dur)}` : Jam.clock(shown);
+  };
+  setInterval(tickBar, 500);
+
+  let last = '';
+  const render = (s) => {
+    clk = s.now && { pos: s.now.position, at: performance.now(), paused: s.now.paused, dur: s.now.duration };
+    const json = JSON.stringify({ ...s, now: s.now && { ...s.now, position: 0 } });
+    if (json === last) { tickBar(); return; }
+    last = json;
+    $('room').textContent = s.room.name;
+    document.title = `${s.room.name} · jamroom`;
+    const now = $('now'); now.textContent = '';
+    if (s.now) { const ul = el('ul', 'list'); ul.append(row(s.now, 'now')); now.append(ul); }
+    else {
+      const a = el('a', null, 'Open the player'); a.href = `/r/${code}/player`;
+      now.append(empty('Nothing is playing. Open the player on the computer that’s connected to the speakers. ', a));
+    }
+    const q = $('q'); q.textContent = '';
+    $('qn').textContent = s.queue.length ? `(${s.queue.length})` : '';
+    if (s.queue.length) s.queue.forEach((t) => q.append(row(t)));
+    else q.append(empty('The queue is empty. Add the first song above.'));
+    tickBar();
+    const r = $('recent'); r.textContent = '';
+    if (s.recent.length) s.recent.forEach((t) => r.append(row(t, 'done')));
+    else r.append(empty('Nothing has played yet.'));
+  };
+
+  const load = () => api('/state').then(render).catch((e) => say(e.message, 'err'));
+
+  $('f').addEventListener('submit', async (e) => {
     e.preventDefault();
-    var name = $('nm').value.trim();
+    const name = $('nm').value.trim();
     try { localStorage.setItem('jam-name', name); } catch (e2) {}
     $('add').disabled = true; say('Looking that up…');
-    api('/add', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ input: $('in').value, name: name }) })
-      .then(function (r) { say(r.added === 1 ? 'Added "' + r.first + '".' : 'Added ' + r.added + ' songs.', 'ok'); $('in').value = ''; return load(); })
-      .catch(function (err) { say(err.message, 'err'); })
-      .then(function () { $('add').disabled = false; });
+    try {
+      const r = await api('/add', 'POST', { input: $('in').value, name });
+      say(r.added === 1 ? `Added “${r.first}”.` : `Added ${r.added} songs.`, 'ok');
+      $('in').value = '';
+      await load();
+    } catch (err) {
+      say(err.message, 'err');
+    }
+    $('add').disabled = false;
   });
+
   load(); setInterval(load, 2000);
 })();
 </script>

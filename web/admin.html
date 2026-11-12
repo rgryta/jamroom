@@ -3,63 +3,136 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Jam admin</title>
+<title>jamroom admin</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2317173a'/%3E%3Crect x='6' y='13' width='20' height='8' rx='2' fill='%23ffd23f'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/jam.css">
 <style>
-  :root { color-scheme: dark light; --bg:#14161a; --fg:#eceef2; --mut:#9aa3b2; --card:#1d2128; --acc:#6ea8fe; --line:#2c323c; --bad:#ff7b7b; }
-  @media (prefers-color-scheme: light) { :root { --bg:#f6f7f9; --fg:#14161a; --mut:#5b6575; --card:#fff; --acc:#2563eb; --line:#d9dee6; --bad:#c0392b; } }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.4 system-ui, sans-serif; }
-  main { max-width:640px; margin:0 auto; padding:16px; }
-  h1 { font-size:1.4rem; margin:0 0 12px; } a { color:var(--acc); }
-  form { display:flex; gap:8px; margin-bottom:12px; }
-  input, button { font:inherit; padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--fg); min-width:0; }
-  input { flex:1; } button { cursor:pointer; } button.go { background:var(--acc); color:#fff; border:0; font-weight:600; }
-  ul { list-style:none; margin:0; padding:0; display:grid; gap:8px; }
-  li { display:flex; justify-content:space-between; align-items:center; gap:8px; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:10px 12px; }
-  .m { color:var(--mut); font-size:.85rem; } .rev { opacity:.5; } #msg { color:var(--bad); min-height:1.4em; }
+  .room-row { display: grid; gap: 10px; padding: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
+  .room-row.revoked { opacity: .7; }
+  .room-row h3 { margin: 0; font: 700 1.125rem var(--display); letter-spacing: -.02em; display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+  .code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; color: var(--mut); font-size: .9375rem; }
+  .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  dialog { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); color: var(--ink); max-width: min(420px, calc(100vw - 32px)); padding: 20px; }
+  dialog::backdrop { background: rgba(15, 16, 36, .6); }
+  dialog h2 { margin-top: 0; }
+  dialog .btns { margin-top: 16px; justify-content: flex-end; }
+  .stat { color: var(--mut); margin: 0 0 8px; }
 </style>
 </head>
 <body>
-<main>
-  <h1>Jam rooms</h1>
-  <form id="tok"><input id="token" type="password" placeholder="Admin token" autocomplete="off"><button>Unlock</button></form>
-  <p id="msg"></p>
-  <form id="new" hidden><input id="name" placeholder="New room name" maxlength="40" required><button class="go">Create</button></form>
-  <ul id="rooms"></ul>
+<header class="top"><a class="mark" href="/">jam<mark class="hl">room</mark></a></header>
+<main class="wrap">
+  <h1>Rooms</h1>
+
+  <form id="tok">
+    <label class="lbl" for="token">Admin token</label>
+    <div class="addrow">
+      <input class="field" id="token" type="password" autocomplete="current-password" required>
+      <button class="btn">Unlock</button>
+    </div>
+  </form>
+  <p class="msg" id="msg" role="status" aria-live="polite"></p>
+
+  <div id="panel" hidden>
+    <p class="stat" id="lib"></p>
+    <form id="new">
+      <label class="lbl" for="name">New room</label>
+      <div class="addrow">
+        <input class="field" id="name" maxlength="40" placeholder="Room name, for example Office" autocomplete="off" required>
+        <button class="btn">Create room</button>
+      </div>
+    </form>
+    <h2>All rooms</h2>
+    <ul class="list" id="rooms"></ul>
+  </div>
 </main>
+
+<dialog id="ask" aria-labelledby="ask-h">
+  <h2 id="ask-h"></h2>
+  <p id="ask-p"></p>
+  <div class="btns">
+    <button class="btn ghost" id="keep" type="button">Keep room</button>
+    <button class="btn warn" id="drop" type="button">Revoke room</button>
+  </div>
+</dialog>
+
+<script src="/assets/jam.js"></script>
 <script>
-(function () {
-  var $ = function (id) { return document.getElementById(id); };
-  var token = '';
+(() => {
+  const { el } = Jam;
+  const $ = (id) => document.getElementById(id);
+  let token = '';
   try { token = sessionStorage.getItem('jam-admin') || ''; } catch (e) {}
-  function api(path, method, body) {
-    return fetch('/api/admin' + path, { method: method || 'GET', headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined })
-      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { if (!r.ok) throw new Error(j.error || r.statusText); return j; }); });
-  }
-  function node(tag, text) { var n = document.createElement(tag); if (text != null) n.textContent = text; return n; }
-  function load() {
-    return api('/rooms').then(function (d) {
-      $('msg').textContent = ''; $('tok').hidden = true; $('new').hidden = false;
-      var ul = $('rooms'); ul.textContent = '';
-      d.rooms.forEach(function (r) {
-        var li = node('li'); if (r.revoked) li.className = 'rev';
-        var left = node('div'); left.appendChild(node('div', r.name));
-        var link = location.origin + '/r/' + r.code;
-        var m = node('div'); m.className = 'm';
-        if (r.revoked) m.textContent = 'revoked'; else { var a = node('a', link); a.href = link; m.appendChild(a); }
-        left.appendChild(m); li.appendChild(left);
-        if (!r.revoked) {
-          var b = node('button', 'Revoke');
-          b.addEventListener('click', function () { if (confirm('Revoke "' + r.name + '"? Its link stops working.')) api('/rooms/' + r.code, 'DELETE').then(load); });
-          li.appendChild(b);
-        }
-        ul.appendChild(li);
-      });
-      if (!d.rooms.length) ul.appendChild(node('li', 'No rooms yet.'));
-    }).catch(function (e) { $('msg').textContent = e.message; $('tok').hidden = false; $('new').hidden = true; });
-  }
-  $('tok').addEventListener('submit', function (e) { e.preventDefault(); token = $('token').value; try { sessionStorage.setItem('jam-admin', token); } catch (e2) {} load(); });
-  $('new').addEventListener('submit', function (e) { e.preventDefault(); api('/rooms', 'POST', { name: $('name').value }).then(function () { $('name').value = ''; return load(); }).catch(function (er) { $('msg').textContent = er.message; }); });
+  const say = (text, cls) => { $('msg').textContent = text; $('msg').className = 'msg ' + (cls || ''); };
+
+  const call = async (path, method = 'GET', body) => {
+    const r = await fetch('/api/admin' + path, {
+      method,
+      headers: { authorization: 'Bearer ' + token, ...(body ? { 'content-type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), { status: r.status });
+    return j;
+  };
+
+  const copy = (btn, text) => navigator.clipboard.writeText(text).then(() => {
+    const was = btn.textContent; btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = was; }, 1500);
+  }).catch(() => say('Copying is blocked here. Select the link by hand instead.', 'err'));
+
+  const confirmRevoke = (room) => new Promise((resolve) => {
+    $('ask-h').textContent = `Revoke “${room.name}”?`;
+    $('ask-p').textContent = 'Its links stop working straight away and anyone in the room is locked out. This can’t be undone.';
+    const done = (yes) => { $('ask').close(); $('keep').onclick = $('drop').onclick = null; resolve(yes); };
+    $('keep').onclick = () => done(false);
+    $('drop').onclick = () => done(true);
+    $('ask').showModal();
+  });
+
+  const draw = (data) => {
+    $('lib').textContent = `${data.library_tracks.toLocaleString()} songs in the music library index.`;
+    const ul = $('rooms'); ul.textContent = '';
+    if (!data.rooms.length) ul.append(el('li', 'empty', 'No rooms yet. Create one above.'));
+    data.rooms.forEach((r) => {
+      const li = el('li', 'room-row' + (r.revoked ? ' revoked' : ''));
+      const h = el('h3', null, r.name);
+      h.append(el('span', 'code', r.code), el('span', 'count', r.revoked ? 'Revoked' : `Created ${new Date(r.created_at * 1000).toLocaleDateString()}`));
+      const btns = el('div', 'btns');
+      if (!r.revoked) {
+        const link = `${location.origin}/r/${r.code}`;
+        const add = el('button', 'btn ghost sm', 'Copy add link'); add.type = 'button';
+        add.addEventListener('click', () => copy(add, link));
+        const player = el('button', 'btn ghost sm', 'Copy player link'); player.type = 'button';
+        player.addEventListener('click', () => copy(player, `${link}/player`));
+        const revoke = el('button', 'btn warn sm', 'Revoke'); revoke.type = 'button';
+        revoke.setAttribute('aria-label', `Revoke ${r.name}`);
+        revoke.addEventListener('click', async () => {
+          if (await confirmRevoke(r)) call(`/rooms/${r.code}`, 'DELETE').then(load).catch((e) => say(e.message, 'err'));
+        });
+        btns.append(add, player, revoke);
+      }
+      li.append(h, btns);
+      ul.append(li);
+    });
+  };
+
+  const load = async () => {
+    try {
+      draw(await call('/rooms'));
+      $('tok').hidden = true; $('panel').hidden = false;
+      try { sessionStorage.setItem('jam-admin', token); } catch (e) {}
+    } catch (e) {
+      $('tok').hidden = false; $('panel').hidden = true;
+      if (token) say(e.status === 401 ? 'That token isn’t right.' : e.status === 429 ? 'Too many tries. Wait a minute, then try again.' : e.message, 'err');
+      try { sessionStorage.removeItem('jam-admin'); } catch (e2) {}
+    }
+  };
+
+  $('tok').addEventListener('submit', (e) => { e.preventDefault(); token = $('token').value; load(); });
+  $('new').addEventListener('submit', (e) => {
+    e.preventDefault();
+    call('/rooms', 'POST', { name: $('name').value }).then((r) => { $('name').value = ''; return load(); }).catch((err) => say(err.message, 'err'));
+  });
   if (token) load();
 })();
 </script>

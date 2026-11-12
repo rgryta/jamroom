@@ -1,0 +1,88 @@
+/* Shared look for every jamroom page. Light and dark follow the system setting. */
+:root {
+  color-scheme: light dark;
+  --bg: #f1f3f9; --surface: #fff; --ink: #17173a; --mut: #555b78; --line: #d8dbe9; --edge: #767c99;
+  --act: #3a45e0; --on-act: #fff; --hl: #ffd23f; --on-hl: #17173a; --bad: #b3261e; --ok: #0b7a4b;
+  --r: 14px;
+  --display: ui-rounded, "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0f1024; --surface: #181a38; --ink: #eceeff; --mut: #a3a8cc; --line: #2b2e57; --edge: #7076a8; --act: #8d96ff; --on-act: #0f1024; --bad: #ff8a80; --ok: #6fe0a8; }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink); font: 400 1rem/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif; }
+h1, h2 { font-family: var(--display); letter-spacing: -.03em; margin: 0; }
+h1 { font-size: clamp(2rem, 6vw, 2.75rem); line-height: 1.05; font-weight: 800; margin: 8px 0 20px; }
+h2 { font-size: 1.0625rem; font-weight: 700; margin: 28px 0 10px; display: flex; align-items: baseline; gap: 8px; }
+a { color: var(--act); }
+:focus-visible { outline: 3px solid var(--act); outline-offset: 2px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* page frame */
+.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; max-width: 640px; margin: 0 auto; padding: 16px 16px 0; }
+.mark { font: 800 1.25rem var(--display); letter-spacing: -.03em; color: var(--ink); text-decoration: none; }
+.wrap { max-width: 640px; margin: 0 auto; padding: 20px 16px 64px; }
+.count { color: var(--mut); font-weight: 600; font-size: .9375rem; }
+
+/* the highlighter: marks whatever is playing */
+.hl { background: var(--hl); color: var(--on-hl); padding: .02em .3em; border-radius: .25em; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+mark:empty { display: none; }
+
+/* buttons */
+.btn { font: inherit; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 20px; border-radius: 12px; border: 2px solid transparent; background: var(--act); color: var(--on-act); cursor: pointer; text-decoration: none; }
+.btn:hover { filter: brightness(1.08); }
+.btn[disabled] { opacity: .55; cursor: default; filter: none; }
+.btn.ghost { background: transparent; color: var(--ink); border-color: var(--edge); }
+.btn.ghost:hover { border-color: var(--ink); filter: none; }
+.btn.warn { background: transparent; color: var(--bad); border-color: var(--bad); }
+.btn.sm { padding: 0 14px; }
+.btn.big { min-height: 56px; padding: 0 28px; font-size: 1.125rem; }
+
+/* forms */
+.lbl { display: block; font-weight: 700; margin-bottom: 6px; }
+.field { font: inherit; width: 100%; min-height: 52px; padding: 0 16px; border-radius: 12px; border: 2px solid var(--edge); background: var(--surface); color: var(--ink); }
+.field:focus-visible { border-color: var(--act); outline-offset: 0; }
+.hint { color: var(--mut); font-size: .875rem; margin: 6px 0 0; }
+.addrow { display: flex; gap: 8px; }
+.addrow .field { flex: 1; min-width: 0; }
+.msg { min-height: 1.5em; margin: 8px 0 0; font-weight: 600; }
+.msg.err { color: var(--bad); }
+.msg.ok { color: var(--ok); }
+details.name { margin-top: 12px; color: var(--mut); }
+details.name summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; text-decoration: underline; text-underline-offset: 3px; }
+details.name label { display: block; margin-top: 8px; font-weight: 600; color: var(--ink); }
+details.name .field { margin-top: 6px; }
+
+/* song artwork: the cover when there is one, otherwise a sleeve made from the title */
+.sleeve { position: relative; overflow: hidden; aspect-ratio: 1; border-radius: 10px; background: var(--line); display: grid; place-items: center; container-type: size; }
+.sleeve img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.sleeve-letter { font: 800 52cqw/1 var(--display); color: rgba(255, 255, 255, .88); text-shadow: 0 2px 12px rgba(0, 0, 0, .25); }
+
+/* queue rows */
+.acts { display: grid; gap: 8px; justify-items: stretch; }
+.bar { height: 6px; margin-top: 8px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; background: var(--act); }
+.times { font-variant-numeric: tabular-nums; }
+.list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.track { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
+.track.now { grid-template-columns: 72px minmax(0, 1fr) auto; padding: 14px; border-color: var(--ink); }
+.track .title { font-weight: 700; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.track .sub { color: var(--mut); font-size: .875rem; overflow-wrap: anywhere; }
+.track.done .title { font-weight: 600; color: var(--mut); }
+.empty { border: 2px dashed var(--line); border-radius: var(--r); padding: 16px; color: var(--mut); }
+.empty a { font-weight: 700; }
+.chip { display: inline-flex; align-items: center; gap: 6px; font-size: .8125rem; font-weight: 600; color: var(--mut); }
+.chip::before { content: ""; width: .75em; height: .75em; border-radius: 50%; border: 2px solid currentColor; flex: none; }
+.chip.ready { color: var(--ok); }
+.chip.ready::before { background: currentColor; }
+.chip.working::before { border-top-color: transparent; animation: spin 1s linear infinite; }
+.chip.failed { color: var(--bad); }
+.chip.failed::before { content: "!"; display: grid; place-items: center; width: 1.1em; height: 1.1em; font-size: .75em; line-height: 1; border: 0; background: currentColor; color: var(--surface); }
+details.recent { margin-top: 28px; }
+details.recent summary { cursor: pointer; font: 700 1.0625rem var(--display); min-height: 44px; display: flex; align-items: center; }
+details.recent .list { margin-top: 6px; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

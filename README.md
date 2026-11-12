@@ -32,6 +32,14 @@ artist, length within 3 s) is played from there and never downloaded again.
 
 Downloads are about 128 kbps AAC, which is what YouTube serves.
 
+## Playing in sync
+
+The server keeps one playback clock per room (the playing song's start time, or the spot where it
+was paused). Every player page follows that clock: it joins a song at the right second, rejoins
+after a stall or a browser pause, and pause, resume and seek from any page or media key apply to
+all players. Restarting the server does not stop the song. The pages share `web/jam.css` and
+`web/jam.js`, served at `/assets/`, and follow the system light or dark setting.
+
 ## Run
 
 ```sh

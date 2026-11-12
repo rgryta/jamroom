@@ -35,6 +35,7 @@ pub enum Input {
 const YT_HOSTS: &[&str] = &["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"];
 const SC_HOSTS: &[&str] = &["soundcloud.com", "www.soundcloud.com", "m.soundcloud.com", "on.soundcloud.com"];
 const TIDAL_HOSTS: &[&str] = &["tidal.com", "www.tidal.com", "listen.tidal.com", "play.tidal.com"];
+const SPOTIFY_SHORT_HOSTS: &[&str] = &["spotify.link", "spotify.app.link", "link.tospotify.com"];
 const ONLY: &str = "only YouTube, SoundCloud, Spotify and Tidal links work, or type a song name";
 
 fn spotify(kind: &str, id: &str) -> Result<Input, String> {
@@ -81,6 +82,9 @@ pub fn classify(input: &str) -> Result<Input, String> {
             (Some(k), Some(id)) => spotify(k, id),
             _ => Err("that Spotify link looks broken".into()),
         };
+    }
+    if SPOTIFY_SHORT_HOSTS.contains(&host.as_str()) {
+        return Err("that is a Spotify share shortcut; open it, copy the song’s own link (open.spotify.com…), or type the song name".into());
     }
     if TIDAL_HOSTS.contains(&host.as_str()) {
         Ok(Input::Tidal(url))
@@ -495,6 +499,7 @@ mod tests {
         assert!(classify("http://127.0.0.1:8080/admin").is_err());
         assert!(classify("file:///etc/passwd").is_err());
         assert!(classify("https://youtube.com.evil.example/watch").is_err());
+        assert!(classify("https://spotify.link/AbCdEf").unwrap_err().contains("share shortcut"));
         assert!(classify("https://open.spotify.com/artist/0ea4MiVQlqu6IEyKJ818OC").is_err());
         assert!(classify("https://open.spotify.com/track/short").is_err());
         assert!(classify("").is_err());

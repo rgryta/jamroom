@@ -3,34 +3,51 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Jam</title>
+<title>jamroom</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2317173a'/%3E%3Crect x='6' y='13' width='20' height='8' rx='2' fill='%23ffd23f'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/jam.css">
 <style>
-  :root { color-scheme: dark light; --bg:#14161a; --fg:#eceef2; --mut:#9aa3b2; --card:#1d2128; --acc:#6ea8fe; --line:#2c323c; }
-  @media (prefers-color-scheme: light) { :root { --bg:#f6f7f9; --fg:#14161a; --mut:#5b6575; --card:#fff; --acc:#2563eb; --line:#d9dee6; } }
-  * { box-sizing: border-box; }
-  body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--fg); font:16px/1.4 system-ui, sans-serif; padding:16px; }
-  main { width:100%; max-width:380px; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:24px; }
-  h1 { margin:0 0 4px; font-size:1.5rem; }
-  p { margin:0 0 16px; color:var(--mut); }
-  input, button { width:100%; font:inherit; padding:12px; border-radius:10px; border:1px solid var(--line); background:var(--bg); color:var(--fg); }
-  button { margin-top:10px; background:var(--acc); color:#fff; border:0; font-weight:600; cursor:pointer; }
+  .join { padding-top: 12vh; }
+  .join .field { font-size: 1.5rem; font-weight: 700; letter-spacing: .08em; min-height: 64px; }
+  .join .btn { width: 100%; margin-top: 12px; min-height: 56px; font-size: 1.125rem; }
 </style>
 </head>
 <body>
-<main>
-  <h1>Jam</h1>
-  <p>Enter the room code to add songs to the queue.</p>
-  <form id="f">
-    <input id="code" placeholder="Room code" autocomplete="off" autocapitalize="none" spellcheck="false" required>
-    <button>Join</button>
+<header class="top"><span class="mark">jam<mark class="hl">room</mark></span></header>
+<main class="wrap join">
+  <h1>Join the jam</h1>
+  <form id="f" novalidate>
+    <label class="lbl" for="code">Room code</label>
+    <input class="field" id="code" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-describedby="hint msg" required>
+    <p class="hint" id="hint">The 10-character code from whoever started the jam. You can paste the whole room link too.</p>
+    <button class="btn" id="go">Join room</button>
+    <p class="msg" id="msg" role="status" aria-live="polite"></p>
   </form>
 </main>
+<script src="/assets/jam.js"></script>
 <script>
-  document.getElementById('f').addEventListener('submit', function (e) {
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const say = (text, cls) => { $('msg').textContent = text; $('msg').className = 'msg ' + (cls || ''); };
+  // Accepts the bare code, or a pasted room link.
+  const clean = (v) => { const m = v.match(/\/r\/([a-z0-9]+)/i); return (m ? m[1] : v).trim().toLowerCase().replace(/\s+/g, ''); };
+
+  $('f').addEventListener('submit', async (e) => {
     e.preventDefault();
-    var c = document.getElementById('code').value.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (c) location.href = '/r/' + c;
+    const code = clean($('code').value);
+    if (!code) { say('Enter the room code.', 'err'); $('code').focus(); return; }
+    $('go').disabled = true; say('Checking the code…');
+    try {
+      await Jam.roomApi(code)('/state');
+      location.href = '/r/' + code;
+    } catch (err) {
+      say(err.status === 404 ? 'No room with that code. Check it and try again.'
+        : err.status === 429 ? 'Too many wrong codes. Wait a minute, then try again.'
+        : 'Can’t reach the server. Check your connection and try again.', 'err');
+      $('go').disabled = false; $('code').focus();
+    }
   });
+})();
 </script>
 </body>
 </html>

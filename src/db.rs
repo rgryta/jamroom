@@ -14,6 +14,13 @@ pub fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
+/// A playing song's clock: its id, when it started (epoch ms) and where it is if paused.
+type Clock = (i64, Option<i64>, Option<f64>);
+
+pub fn now_ms() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS rooms(
     code TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
@@ -53,6 +60,10 @@ pub struct Track {
     pub cover: Option<String>,
     pub added_by: Option<String>,
     pub error: Option<String>,
+    /// Seconds into the song that every player should be at right now. Only the playing song has one.
+    pub position: Option<f64>,
+    /// True while the room is paused. Only meaningful for the playing song.
+    pub paused: bool,
 }
 
 /// What the resolver learned about a requested track.
@@ -95,12 +106,17 @@ pub struct Snapshot {
     pub recent: Vec<Track>,
 }
 
-const TRACK_COLS: &str = "id, status, artist, title, album, duration, cover, added_by, error";
+const TRACK_COLS: &str = "id, status, artist, title, album, duration, cover, added_by, error, started_ms, paused_pos";
 
 fn track_from(r: &Row) -> rusqlite::Result<Track> {
+    let status: String = r.get(1)?;
+    let (started_ms, paused_pos): (Option<i64>, Option<f64>) = (r.get(9)?, r.get(10)?);
+    let playing = status == "playing";
+    // The playback clock: a paused song stays where it stopped, a running one moves with time.
+    let position = playing.then(|| paused_pos.unwrap_or_else(|| started_ms.map_or(0.0, |s| ((now_ms() - s) as f64 / 1000.0).max(0.0))));
     Ok(Track {
         id: r.get(0)?,
-        status: r.get(1)?,
+        status,
         artist: r.get(2)?,
         title: r.get(3)?,
         album: r.get(4)?,
@@ -108,6 +124,8 @@ fn track_from(r: &Row) -> rusqlite::Result<Track> {
         cover: r.get(6)?,
         added_by: r.get(7)?,
         error: r.get(8)?,
+        position,
+        paused: playing && paused_pos.is_some(),
     })
 }
 
@@ -126,6 +144,13 @@ impl Db {
 
     fn init(conn: Connection) -> Result<Db> {
         conn.execute_batch(SCHEMA)?;
+        // Columns added after the first release; older databases get them here.
+        for (col, decl) in [("started_ms", "INTEGER"), ("paused_pos", "REAL")] {
+            let has: i64 = conn.query_row("SELECT COUNT(*) FROM pragma_table_info('tracks') WHERE name = ?1", [col], |r| r.get(0))?;
+            if has == 0 {
+                conn.execute_batch(&format!("ALTER TABLE tracks ADD COLUMN {col} {decl}"))?;
+            }
+        }
         Ok(Db { conn: Mutex::new(conn) })
     }
 
@@ -208,8 +233,12 @@ impl Db {
         let head = tx.query_row(&q, [room], track_from).optional()?;
         let out = match head {
             Some(mut t) if t.status == "ready" => {
-                tx.execute("UPDATE tracks SET status = 'playing', started_at = ?2 WHERE id = ?1", params![t.id, now()])?;
+                tx.execute(
+                    "UPDATE tracks SET status = 'playing', started_at = ?2, started_ms = ?3, paused_pos = NULL WHERE id = ?1",
+                    params![t.id, now(), now_ms()],
+                )?;
                 t.status = "playing".into();
+                t.position = Some(0.0);
                 Some(t)
             }
             _ => None,
@@ -222,6 +251,47 @@ impl Db {
     /// player must not end the track that replaced it.
     pub fn finish_track(&self, room: &str, id: i64) -> Result<()> {
         self.c().execute("UPDATE tracks SET status = 'played' WHERE room = ?1 AND id = ?2 AND status = 'playing'", params![room, id])?;
+        Ok(())
+    }
+
+    /// The playing song of a room with its clock: (id, started_ms, paused_pos).
+    fn playing_clock(c: &Connection, room: &str) -> Result<Option<Clock>> {
+        Ok(c.query_row("SELECT id, started_ms, paused_pos FROM tracks WHERE room = ?1 AND status = 'playing' LIMIT 1", [room], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .optional()?)
+    }
+
+    /// Pause or resume the room. Every player follows the clock, so all of them stop and start together.
+    pub fn set_paused(&self, room: &str, paused: bool) -> Result<()> {
+        let c = self.c();
+        let Some((id, started, at)) = Self::playing_clock(&c, room)? else { return Ok(()) };
+        match (paused, at) {
+            (true, None) => {
+                let here = started.map_or(0.0, |s| ((now_ms() - s) as f64 / 1000.0).max(0.0));
+                c.execute("UPDATE tracks SET paused_pos = ?2 WHERE id = ?1", params![id, here])?;
+            }
+            (false, Some(p)) => {
+                c.execute(
+                    "UPDATE tracks SET started_ms = ?2, paused_pos = NULL WHERE id = ?1",
+                    params![id, now_ms() - (p * 1000.0) as i64],
+                )?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Move the playing song to `to` seconds for every player.
+    pub fn seek(&self, room: &str, to: f64) -> Result<()> {
+        let to = if to.is_finite() { to.max(0.0) } else { 0.0 };
+        let c = self.c();
+        let Some((id, _, at)) = Self::playing_clock(&c, room)? else { return Ok(()) };
+        if at.is_some() {
+            c.execute("UPDATE tracks SET paused_pos = ?2 WHERE id = ?1", params![id, to])?;
+        } else {
+            c.execute("UPDATE tracks SET started_ms = ?2 WHERE id = ?1", params![id, now_ms() - (to * 1000.0) as i64])?;
+        }
         Ok(())
     }
 
@@ -308,11 +378,10 @@ impl Db {
         Ok(())
     }
 
-    /// Run at startup: anything left half-done by a restart goes back in line.
+    /// Run at startup: downloads cut off by a restart go back in line. The playing song stays as
+    /// it is: its clock is wall time, so listeners carry on in the right place after a restart.
     pub fn reset_stale(&self) -> Result<()> {
-        let c = self.c();
-        c.execute("UPDATE tracks SET status = 'queued' WHERE status = 'working'", [])?;
-        c.execute("UPDATE tracks SET status = 'ready' WHERE status = 'playing'", [])?;
+        self.c().execute("UPDATE tracks SET status = 'queued' WHERE status = 'working'", [])?;
         Ok(())
     }
 
@@ -471,6 +540,47 @@ mod tests {
         db.next_job().unwrap();
         db.reset_stale().unwrap();
         assert_eq!(db.next_job().unwrap().unwrap().id, a);
+    }
+
+    #[test]
+    fn a_restart_does_not_stop_the_song_that_is_playing() {
+        let db = Db::memory().unwrap();
+        let a = db.add_track("r", &track("one")).unwrap();
+        db.next_job().unwrap();
+        db.set_ready(a, "/x/one.m4a", false).unwrap();
+        db.claim_next("r").unwrap();
+        db.reset_stale().unwrap();
+        assert_eq!(db.claim_next("r").unwrap().unwrap().id, a);
+    }
+
+    #[test]
+    fn the_playback_clock_runs_pauses_and_seeks() {
+        let db = Db::memory().unwrap();
+        let a = db.add_track("r", &track("one")).unwrap();
+        db.next_job().unwrap();
+        db.set_ready(a, "/x/one.m4a", false).unwrap();
+        let t = db.claim_next("r").unwrap().unwrap();
+        assert!(t.position.unwrap() < 1.0 && !t.paused);
+
+        db.seek("r", 30.0).unwrap();
+        let p = db.claim_next("r").unwrap().unwrap().position.unwrap();
+        assert!((30.0..31.0).contains(&p), "{p}");
+
+        db.set_paused("r", true).unwrap();
+        let frozen = db.claim_next("r").unwrap().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let later = db.claim_next("r").unwrap().unwrap();
+        assert!(later.paused && frozen.position == later.position);
+
+        db.seek("r", 5.0).unwrap();
+        assert_eq!(db.claim_next("r").unwrap().unwrap().position, Some(5.0));
+        db.set_paused("r", false).unwrap();
+        let moving = db.claim_next("r").unwrap().unwrap();
+        assert!(!moving.paused && (5.0..6.0).contains(&moving.position.unwrap()));
+        // Nothing playing: pausing and seeking do nothing instead of failing.
+        db.finish_track("r", a).unwrap();
+        db.set_paused("r", true).unwrap();
+        db.seek("r", 3.0).unwrap();
     }
 
     #[test]
