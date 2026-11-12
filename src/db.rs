@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS tracks(
     duration REAL, cover TEXT, src TEXT, query TEXT, file TEXT, error TEXT,
     added_by TEXT, added_at INTEGER NOT NULL, started_at INTEGER, fetched_at INTEGER);
 CREATE INDEX IF NOT EXISTS tracks_room ON tracks(room, status);
+CREATE TABLE IF NOT EXISTS upgrades(
+    key TEXT PRIMARY KEY, artist TEXT NOT NULL, title TEXT NOT NULL, duration REAL, cached TEXT NOT NULL,
+    status TEXT NOT NULL, peer TEXT NOT NULL DEFAULT '', remote TEXT NOT NULL DEFAULT '', size INTEGER NOT NULL DEFAULT 0,
+    note TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS library(
     path TEXT PRIMARY KEY, mtime INTEGER NOT NULL, artist TEXT NOT NULL, title TEXT NOT NULL,
     tn TEXT NOT NULL, duration REAL);
@@ -87,6 +91,25 @@ pub struct NewTrack {
 pub struct Job {
     pub id: i64,
     pub item: NewTrack,
+}
+
+/// A song whose file is in the cache: artist, title, length and that file.
+pub type CachedSong = (String, String, Option<f64>, String);
+
+/// The hunt for a better copy of one cached song. `status` is searching, downloading, done, none or failed.
+#[derive(Debug, Clone, Default)]
+pub struct Upgrade {
+    pub key: String,
+    pub artist: String,
+    pub title: String,
+    pub duration: Option<f64>,
+    pub cached: String,
+    pub status: String,
+    pub peer: String,
+    pub remote: String,
+    pub size: i64,
+    pub note: String,
+    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -386,6 +409,58 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    // ---- Soulseek upgrades ----
+
+    /// Songs whose file is in the cache: artist, title, length and the cached file, oldest first.
+    pub fn cached_songs(&self, prefix: &str) -> Result<Vec<CachedSong>> {
+        let c = self.c();
+        let mut st = c.prepare(
+            "SELECT artist, title, duration, file FROM tracks WHERE file IS NOT NULL AND substr(file, 1, length(?1)) = ?1
+             GROUP BY lower(artist), lower(title) ORDER BY MIN(id)",
+        )?;
+        let rows = st.query_map([prefix], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn upgrades(&self) -> Result<HashMap<String, Upgrade>> {
+        let c = self.c();
+        let mut st =
+            c.prepare("SELECT key, artist, title, duration, cached, status, peer, remote, size, note, updated_at FROM upgrades")?;
+        let rows = st.query_map([], |r| {
+            Ok(Upgrade {
+                key: r.get(0)?,
+                artist: r.get(1)?,
+                title: r.get(2)?,
+                duration: r.get(3)?,
+                cached: r.get(4)?,
+                status: r.get(5)?,
+                peer: r.get(6)?,
+                remote: r.get(7)?,
+                size: r.get(8)?,
+                note: r.get(9)?,
+                updated_at: r.get(10)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?.into_iter().map(|u| (u.key.clone(), u)).collect())
+    }
+
+    pub fn upgrade_put(&self, u: &Upgrade) -> Result<()> {
+        self.c().execute(
+            "INSERT INTO upgrades(key, artist, title, duration, cached, status, peer, remote, size, note, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT(key) DO UPDATE SET artist = ?2, title = ?3, duration = ?4, cached = ?5, status = ?6, peer = ?7,
+                 remote = ?8, size = ?9, note = ?10, updated_at = ?11",
+            params![u.key, u.artist, u.title, u.duration, u.cached, u.status, u.peer, u.remote, u.size, u.note, u.updated_at],
+        )?;
+        Ok(())
+    }
+
+    /// Point waiting songs at the better file. The song playing right now keeps its file: switching
+    /// format under a player that is part-way through would break the stream.
+    pub fn apply_upgrade(&self, cached: &str, file: &str) -> Result<usize> {
+        Ok(self.c().execute("UPDATE tracks SET file = ?2 WHERE file = ?1 AND status != 'playing'", params![cached, file])?)
+    }
+
     /// A consistent copy of the whole database (rooms and queue), safe to take while the service runs.
     pub fn backup_to(&self, path: &Path) -> Result<()> {
         let _ = std::fs::remove_file(path);
@@ -576,6 +651,38 @@ mod tests {
         let restored = Db::open(&copy).unwrap();
         assert!(restored.room("abc").unwrap().is_some());
         assert_eq!(restored.snapshot("abc").unwrap().queue.len(), 1);
+    }
+
+    #[test]
+    fn upgrades_are_remembered_and_only_waiting_songs_switch_file() {
+        let db = Db::memory().unwrap();
+        let a = db.add_track("r", &track("one")).unwrap();
+        let b = db.add_track("r", &track("one")).unwrap();
+        db.next_job().unwrap();
+        db.next_job().unwrap();
+        db.set_ready(a, "/cache/A/one.m4a", true).unwrap();
+        db.set_ready(b, "/cache/A/one.m4a", true).unwrap();
+        db.claim_next("r").unwrap(); // `a` is playing, `b` waits
+        let songs = db.cached_songs("/cache/").unwrap();
+        assert_eq!(songs.len(), 1, "the same song twice is one song");
+        assert!(db.cached_songs("/elsewhere/").unwrap().is_empty());
+
+        let up = Upgrade {
+            key: "a|one".into(),
+            artist: "A".into(),
+            title: "one".into(),
+            cached: "/cache/A/one.m4a".into(),
+            status: "downloading".into(),
+            updated_at: 5,
+            ..Default::default()
+        };
+        db.upgrade_put(&up).unwrap();
+        db.upgrade_put(&Upgrade { status: "done".into(), ..up.clone() }).unwrap();
+        assert_eq!(db.upgrades().unwrap()["a|one"].status, "done");
+
+        assert_eq!(db.apply_upgrade("/cache/A/one.m4a", "/music/A/one.flac").unwrap(), 1);
+        assert_eq!(db.track_file("r", b).unwrap().as_deref(), Some("/music/A/one.flac"));
+        assert_eq!(db.track_file("r", a).unwrap().as_deref(), Some("/cache/A/one.m4a"));
     }
 
     #[test]

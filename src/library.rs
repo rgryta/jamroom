@@ -23,7 +23,7 @@ pub fn is_audio(p: &Path) -> bool {
     p.extension().and_then(|e| e.to_str()).is_some_and(|e| AUDIO_EXTS.contains(&e.to_ascii_lowercase().as_str()))
 }
 
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+pub fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     for e in rd.flatten() {
         let p = e.path();
@@ -52,6 +52,13 @@ fn names_from_path(path: &Path, root: &Path) -> (String, String) {
     let artist = if parts.len() > artist_at + 1 { parts[artist_at].clone() } else { String::new() };
     let title = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     (artist, title)
+}
+
+/// The album tag of a file, if it has a useful one.
+pub fn read_album(path: &Path) -> Option<String> {
+    let tagged = lofty::read_from_path(path).ok()?;
+    let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?;
+    tag.album().map(|a| a.to_string()).filter(|a| !a.trim().is_empty())
 }
 
 pub fn read_entry(path: &Path, root: &Path) -> Option<LibEntry> {

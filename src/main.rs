@@ -9,6 +9,7 @@ mod fetch;
 mod library;
 mod norm;
 mod resolve;
+mod soulseek;
 mod web;
 mod ytdlp;
 
@@ -58,6 +59,15 @@ async fn main() -> Result<()> {
         .init();
     let cfg = Arc::new(Config::from_env());
     std::fs::create_dir_all(&cfg.data)?;
+    // `jamroom upgrade`: the Soulseek upgrader, a separate process with its own container.
+    if std::env::args().nth(1).as_deref() == Some("upgrade") {
+        anyhow::ensure!(!cfg.slskd_url.is_empty(), "JAM_SLSKD_URL is not set");
+        let db = Db::open(&cfg.data.join("jamroom.db"))?;
+        return tokio::select! {
+            r = soulseek::run((*cfg).clone(), db) => r,
+            _ = shutdown() => Ok(()),
+        };
+    }
     let tmp = cfg.data.join("tmp");
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp)?;

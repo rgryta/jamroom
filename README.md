@@ -26,9 +26,20 @@ laptop ──► /r/<code>/player  plays the queue (open once, press Start)
 | Tidal link | The page title is used as a YouTube Music search |
 | Plain text | YouTube Music song search, first plausible hit |
 
-Library placement: `<Artist>/<Album>/<Title>.m4a` when an album is known, otherwise
-`Non-Album/<Artist>/<Title>.m4a`. A file that already exists in the library (same title, matching
-artist, length within 3 s) is played from there and never downloaded again.
+Downloads go to a private cache (`/data/songs`, `<Artist>/<Album>/<Title>.m4a` or
+`Non-Album/<Artist>/<Title>.m4a`), not into the music library: YouTube audio is 128 kbps AAC, and the
+library is for better sources. A song that already exists in the library (same title, matching
+artist, length within 3 s) is played from there and never downloaded again; a library file wins
+over a cached one. Cached songs unused for `JAM_CACHE_DAYS` (60) days are deleted.
+
+## Soulseek upgrade
+
+`jamroom upgrade` is a second process (its own container in `deploy/compose.yaml`). For every cached
+song it searches Soulseek through slskd, accepts only a close match (FLAC, or MP3 at 256 kbps or
+more; title and artist in the file name; length within 3 s; no remixes or live versions), waits for
+the download, tags it and files it in the library, then points waiting queue entries at it. Nothing
+else ever writes to the library, and the public service has no route to slskd. Songs with no good
+copy stay in the cache and are tried again after 14 days.
 
 Downloads are about 128 kbps AAC, which is what YouTube serves.
 
@@ -57,7 +68,11 @@ from `/admin` (needs `JAM_ADMIN_TOKEN`). `deploy/compose.yaml` is the homelab st
 |---|---|---|
 | `JAM_ADDR` | `0.0.0.0:8080` | listen address |
 | `JAM_DATA` | `/data` | database, yt-dlp copy, scratch space |
-| `JAM_LIBRARY` | `/music` | music library root (read and write) |
+| `JAM_LIBRARY` | `/music` | music library root (the public service only reads it) |
+| `JAM_CACHE` | `<data>/songs` | where downloaded songs are kept |
+| `JAM_CACHE_DAYS` | `60` | cached songs older than this are deleted unless queued |
+| `JAM_SLSKD_URL` | empty | slskd address; only the upgrader uses it |
+| `JAM_SLSK_DOWNLOADS` | `/slsk` | slskd's finished-downloads folder, as the upgrader sees it |
 | `JAM_ADMIN_TOKEN` | empty | enables the admin API when set |
 | `JAM_PYTHON` | `python3` | interpreter that runs the yt-dlp script (the data volume need not allow execution) |
 | `JAM_MAX_SECONDS` | `900` | longest track that is downloaded |

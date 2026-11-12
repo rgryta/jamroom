@@ -13,6 +13,10 @@ pub struct Config {
     pub cache: PathBuf,
     /// Cached songs older than this many days are deleted unless they are still queued.
     pub cache_days: i64,
+    /// slskd's address, for the Soulseek upgrader (`jamroom upgrade`). Empty means off.
+    pub slskd_url: String,
+    /// Where slskd keeps finished downloads, as seen by the upgrader.
+    pub slsk_downloads: PathBuf,
     /// Bearer token for the room admin API. Empty disables the admin API.
     pub admin_token: String,
     /// yt-dlp binary used for downloads.
@@ -42,6 +46,8 @@ impl Config {
             ytdlp: std::env::var("JAM_YTDLP").map(PathBuf::from).unwrap_or_else(|_| data.join("bin/yt-dlp")),
             cache: std::env::var("JAM_CACHE").map(PathBuf::from).unwrap_or_else(|_| data.join("songs")),
             cache_days: var("JAM_CACHE_DAYS", 60),
+            slskd_url: var("JAM_SLSKD_URL", String::new()),
+            slsk_downloads: PathBuf::from(var("JAM_SLSK_DOWNLOADS", "/slsk".to_string())),
             data,
             library: PathBuf::from(var("JAM_LIBRARY", "/music".to_string())),
             admin_token: var("JAM_ADMIN_TOKEN", String::new()),

@@ -23,7 +23,8 @@ services:
       - /tmp
     volumes:
       - jam-data:/data
-      - /mnt/archive/media/Music:/music
+      # Read-only: the public service reuses songs you already have and never writes to the library.
+      - /mnt/archive/media/Music:/music:ro
     deploy:
       resources:
         limits:
@@ -43,6 +44,46 @@ services:
       - traefik.http.middlewares.jamroom-per-ip.inFlightReq.amount=20
       - traefik.http.middlewares.jamroom-per-ip.inFlightReq.sourceCriterion.ipStrategy.depth=0
       - traefik.http.services.jamroom.loadbalancer.server.port=8080
+  # Looks for a lossless Soulseek copy of every cached YouTube song and files it in the library.
+  # Not on the public network and without ports; it is the only container that writes the library
+  # or talks to slskd.
+  jamroom-soulseek:
+    image: 172.20.0.52:5000/jamroom:latest
+    container_name: jamroom-soulseek
+    command: ["upgrade"]
+    restart: unless-stopped
+    user: "3001:3000"
+    group_add:
+      - "950"
+    read_only: true
+    init: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      TZ: Europe/Warsaw
+      RUST_LOG: info
+      JAM_SLSKD_URL: http://vpn-client:5030
+      JAM_SLSK_DOWNLOADS: /slsk
+    tmpfs:
+      - /tmp
+    volumes:
+      - jam-data:/data
+      - /mnt/archive/media/Music:/music
+      - /mnt/archive/apps/volumes/slskd/downloads/complete:/slsk:ro
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 256M
+    networks:
+      - homelab-vpn-network
+    labels:
+      - wud.watch=true
+      - wud.watch.digest=true
 volumes:
   jam-data:
     driver_opts:
@@ -52,4 +93,7 @@ volumes:
 networks:
   unsafe-network:
     name: unsafe-network
+    external: true
+  homelab-vpn-network:
+    name: homelab-vpn-network
     external: true
