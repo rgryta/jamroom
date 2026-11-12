@@ -444,13 +444,24 @@ fn import(cfg: &Config, up: &Upgrade) -> Result<PathBuf> {
             library::clear_album(&copy)?;
         }
         let ext = copy.extension().and_then(|e| e.to_str()).unwrap_or("flac").to_ascii_lowercase();
-        // Always `Non-Album/<Artist>/<Title>`: never into your own artist and album folders, so
-        // nothing of yours is touched and a compilation cannot create a folder of its own.
-        let dest = library::target_path(&cfg.library, &names.dir_artist, None, &names.title, &ext);
-        if !dest.exists() {
-            library::place(&copy, &dest, &cfg.library)?;
+        // A real album goes in `<Artist>/<Album>/`. If that artist folder is yours and jamroom may not
+        // write there, or the song has no album (or only a compilation), it goes in `Non-Album/<Artist>/`.
+        if let Some(album) = names.album.as_deref() {
+            let filed = library::target_path(&cfg.library, &names.dir_artist, Some(album), &names.title, &ext);
+            if filed.exists() {
+                return Ok(filed);
+            }
+            match library::place(&copy, &filed, &cfg.library) {
+                Ok(()) => return Ok(filed),
+                Err(e) if e.downcast_ref::<std::io::Error>().is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied) => {}
+                Err(e) => return Err(e),
+            }
         }
-        Ok(dest)
+        let flat = library::target_path(&cfg.library, &names.dir_artist, None, &names.title, &ext);
+        if !flat.exists() {
+            library::place(&copy, &flat, &cfg.library)?;
+        }
+        Ok(flat)
     })();
     let _ = std::fs::remove_file(&copy);
     result
@@ -694,6 +705,10 @@ mod tests {
 
     /// A library, a cache, a download folder with one tagged FLAC in it, a fake slskd and one cached song.
     async fn world(requested_title: &str) -> (tempfile::TempDir, Config, Db, Slskd, i64) {
+        world_with(requested_title, "Now That's What I Call Music! 74", "Various Artists").await
+    }
+
+    async fn world_with(requested_title: &str, album: &str, album_artist: &str) -> (tempfile::TempDir, Config, Db, Slskd, i64) {
         use crate::db::NewTrack;
         let dir = tempfile::tempdir().unwrap();
         let remote = r"\\bob\Music\Artist\Some Album\01 Song.flac";
@@ -708,7 +723,7 @@ mod tests {
         let file = cfg.slsk_downloads.join("Some Album/01 Song.flac");
         std::fs::write(&file, include_bytes!("../tests/fixtures/silent.flac")).unwrap();
         // How a real Soulseek file is tagged: clean title, and a compilation as its album.
-        library::write_tags(&file, "Artist", "Various Artists", "Song", Some("Now That's What I Call Music! 74"), None).unwrap();
+        library::write_tags(&file, "Artist", album_artist, "Song", Some(album), None).unwrap();
 
         let db = Db::memory().unwrap();
         let song = NewTrack {
@@ -860,5 +875,29 @@ mod tests {
         // A video-site artist name cannot be compared, so the file's own artist wins.
         let ketchup = choose_names(&tagged("Las Ketchup", "Las Ketchup"), "Aserejé (The Ketchup Song) [Spanish Version]", "Las Ketchup");
         assert_eq!(ketchup.unwrap().dir_artist, "Las Ketchup");
+    }
+
+    #[tokio::test]
+    async fn a_real_album_gets_its_own_folder_and_a_blocked_artist_folder_falls_back_to_non_album() {
+        use std::os::unix::fs::PermissionsExt;
+        // A real album: <Artist>/<Album>/<Title>.
+        let (_dir, cfg, db, sl, _) = world_with("Song", "Homework", "Artist").await;
+        tick(&cfg, &db, &sl).await.unwrap();
+        tick(&cfg, &db, &sl).await.unwrap();
+        assert!(cfg.library.join("Artist/Homework/Song.flac").exists());
+        assert!(!cfg.library.join("Non-Album").exists());
+
+        // An artist folder of yours that jamroom may not write to: the song goes to Non-Album instead.
+        let (_dir, cfg, db, sl, _) = world_with("Song", "Homework", "Artist").await;
+        std::fs::create_dir_all(cfg.library.join("Artist")).unwrap();
+        std::fs::set_permissions(cfg.library.join("Artist"), std::fs::Permissions::from_mode(0o555)).unwrap();
+        if std::fs::File::create(cfg.library.join("Artist/probe")).is_ok() {
+            return; // running as root, where permissions do not apply
+        }
+        tick(&cfg, &db, &sl).await.unwrap();
+        tick(&cfg, &db, &sl).await.unwrap();
+        assert!(cfg.library.join("Non-Album/Artist/Song.flac").exists());
+        assert!(!cfg.library.join("Artist/Homework").exists());
+        std::fs::set_permissions(cfg.library.join("Artist"), std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 }
