@@ -1,6 +1,6 @@
 services:
   jamroom:
-    image: 172.20.0.52:5000/jamroom:latest
+    image: ghcr.io/rgryta/jamroom:0.2.0
     container_name: jamroom
     restart: unless-stopped
     # 3001:3000 owns the library files; group 950 owns its top-level folder and may write there.
@@ -36,7 +36,8 @@ services:
       - traefik.enable=true
       - autoheal=true
       - wud.watch=true
-      - wud.watch.digest=true
+      - wud.tag.include=^\d+\.\d+\.\d+$
+      - wud.trigger.include=dockercompose.jamroom
       - traefik.http.routers.jamroom.rule=Host(`jam.gryta.eu`)
       - traefik.http.routers.jamroom.entrypoints=websecure
       - traefik.http.routers.jamroom.tls.certresolver=le
@@ -48,7 +49,7 @@ services:
   # Not on the public network and without ports; it is the only container that writes the library
   # or talks to slskd.
   jamroom-soulseek:
-    image: 172.20.0.52:5000/jamroom:latest
+    image: ghcr.io/rgryta/jamroom:0.2.0
     container_name: jamroom-soulseek
     command: ["upgrade"]
     restart: unless-stopped
@@ -83,7 +84,8 @@ services:
       - homelab-vpn-network
     labels:
       - wud.watch=true
-      - wud.watch.digest=true
+      - wud.tag.include=^\d+\.\d+\.\d+$
+      - wud.trigger.include=dockercompose.jamroom
 volumes:
   jam-data:
     driver_opts:
