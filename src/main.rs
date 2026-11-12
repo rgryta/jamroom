@@ -86,7 +86,7 @@ async fn main() -> Result<()> {
     }
     let app = App::new(cfg.clone(), db)?;
 
-    // Keep the library index current: once at start, then every half hour.
+    // Keep the library index current: once at start, then every five minutes.
     let scanner = app.clone();
     tokio::spawn(async move {
         loop {
@@ -96,7 +96,7 @@ async fn main() -> Result<()> {
                 Ok(Err(e)) => tracing::warn!(error = %e, "library scan failed"),
                 Err(e) => tracing::warn!(error = %e, "library scan crashed"),
             }
-            tokio::time::sleep(Duration::from_secs(1800)).await;
+            tokio::time::sleep(Duration::from_secs(300)).await;
         }
     });
 

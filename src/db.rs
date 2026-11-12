@@ -93,6 +93,9 @@ pub struct Job {
     pub item: NewTrack,
 }
 
+/// A library file: path, artist, length and title.
+pub type LibHit = (String, String, Option<f64>, String);
+
 /// A song whose file is in the cache: artist, title, length and that file.
 pub type CachedSong = (String, String, Option<f64>, String);
 
@@ -517,10 +520,10 @@ impl Db {
     }
 
     /// Candidate library files for a normalised title, with their artist and length.
-    pub fn lib_by_title(&self, tn: &str) -> Result<Vec<(String, String, Option<f64>)>> {
+    pub fn lib_by_title(&self, tn: &str) -> Result<Vec<LibHit>> {
         let c = self.c();
-        let mut st = c.prepare("SELECT path, artist, duration FROM library WHERE tn = ?1")?;
-        let rows = st.query_map([tn], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        let mut st = c.prepare("SELECT path, artist, duration, title FROM library WHERE tn = ?1")?;
+        let rows = st.query_map([tn], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 

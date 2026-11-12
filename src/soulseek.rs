@@ -9,7 +9,7 @@ use crate::{
     config::Config,
     db::{Db, Upgrade, now},
     library,
-    norm::{artist_match, norm},
+    norm::{OTHER_VERSIONS, artist_match, norm},
     resolve::first_artist,
 };
 use anyhow::{Result, anyhow, bail};
@@ -21,29 +21,6 @@ use std::{
 };
 use url::Url;
 
-/// Words that mark another version of a song. A file with one is skipped unless the title has it too.
-const OTHER_VERSIONS: &[&str] = &[
-    "live",
-    "remix",
-    "instrumental",
-    "karaoke",
-    "cover",
-    "acoustic",
-    "extended",
-    "sped",
-    "slowed",
-    "nightcore",
-    "demo",
-    "radio edit",
-    "8d",
-    "reverb",
-    "lofi",
-    "tribute",
-    "medley",
-    "mashup",
-    "bootleg",
-    "version",
-];
 /// Look again after two weeks for songs nobody shares, after an hour for failures.
 const RETRY_NONE: i64 = 14 * 86_400;
 const RETRY_FAILED: i64 = 3_600;
@@ -473,7 +450,7 @@ fn settle(db: &Db, up: &Upgrade, status: &str, note: &str) -> Result<()> {
 
 /// The library already has this song: let waiting queue entries use that copy when it is the same recording.
 fn use_existing(cfg: &Config, db: &Db, up: &Upgrade) -> Result<()> {
-    if let Some(same) = library::find(db, &cfg.cache, &up.artist, &up.title, up.duration).filter(|p| !Path::new(p).starts_with(&cfg.cache))
+    if let Some(same) = library::best(db, &cfg.cache, &up.artist, &up.title, up.duration).filter(|p| !Path::new(p).starts_with(&cfg.cache))
     {
         db.apply_upgrade(&up.cached, &same)?;
     }
@@ -774,32 +751,26 @@ mod tests {
     async fn a_song_you_already_own_is_never_added_a_second_time() {
         use crate::db::LibEntry;
         let (_dir, cfg, db, sl, id) = world("Song").await;
-        // Your own copy, a slightly different edit (so not the same length), in your own folders.
+        // Your own copy, in your own folders, 98 s longer: too different to be the same recording.
         let mine = cfg.library.join("Artist/Album/01 Song.mp3");
-        db.lib_upsert(&LibEntry {
+        let own = |duration: f64| LibEntry {
             path: mine.to_string_lossy().into(),
             mtime: 1,
             artist: "Artist".into(),
             title: "Song".into(),
             tn: norm("Song"),
-            duration: Some(30.0),
-        })
-        .unwrap();
+            duration: Some(duration),
+        };
+        db.lib_upsert(&own(100.0)).unwrap();
         tick(&cfg, &db, &sl).await.unwrap();
         let up = &db.upgrades().unwrap()["artist|song"];
+        // You own a song with this title and artist, so nothing is added, whatever its length...
         assert_eq!((up.status.as_str(), up.note.as_str()), ("done", "already in the library"));
         assert!(!cfg.library.join("Non-Album").exists(), "nothing was added to the library");
-        assert_ne!(db.track_file("r", id).unwrap().as_deref(), mine.to_str(), "a different edit is not swapped in");
-        // The same recording is used instead of the cached download.
-        db.lib_upsert(&LibEntry {
-            path: mine.to_string_lossy().into(),
-            mtime: 1,
-            artist: "Artist".into(),
-            title: "Song".into(),
-            tn: norm("Song"),
-            duration: Some(2.0),
-        })
-        .unwrap();
+        // ...but a copy that long is not the same recording, so the queued song keeps its own file.
+        assert_ne!(db.track_file("r", id).unwrap().as_deref(), mine.to_str());
+        // A copy of a similar length (an edit of the same song, 28 s apart) is used instead of the cached download.
+        db.lib_upsert(&own(30.0)).unwrap();
         let again = Upgrade { key: "artist|song".into(), ..up.clone() };
         use_existing(&cfg, &db, &again).unwrap();
         assert_eq!(db.track_file("r", id).unwrap().as_deref(), mine.to_str());

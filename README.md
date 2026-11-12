@@ -28,9 +28,10 @@ laptop ──► /r/<code>/player  plays the queue (open once, press Start)
 
 Downloads go to a private cache (`/data/songs`, `<Artist>/<Album>/<Title>.m4a` or
 `Non-Album/<Artist>/<Title>.m4a`), not into the music library: YouTube audio is 128 kbps AAC, and the
-library is for better sources. A song that already exists in the library (same title, matching
-artist, length within 3 s) is played from there and never downloaded again; a library file wins
-over a cached one. Cached songs unused for `JAM_CACHE_DAYS` (60) days are deleted.
+library is for better sources. A song that already exists in the library (same title and matching
+artist; same length within 3 s, or within 30 s unless a version word like live or remix differs)
+is played from there and never downloaded again. Your library comes first, then the cache. The
+library index is refreshed every five minutes. Cached songs unused for `JAM_CACHE_DAYS` (60) days are deleted.
 
 ## Soulseek upgrade
 

@@ -2,6 +2,30 @@
 
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
+/// Words that mark another version of a song. A file with one is skipped unless the title has it too.
+pub const OTHER_VERSIONS: &[&str] = &[
+    "live",
+    "remix",
+    "instrumental",
+    "karaoke",
+    "cover",
+    "acoustic",
+    "extended",
+    "sped",
+    "slowed",
+    "nightcore",
+    "demo",
+    "radio edit",
+    "8d",
+    "reverb",
+    "lofi",
+    "tribute",
+    "medley",
+    "mashup",
+    "bootleg",
+    "version",
+];
+
 /// Lowercase a name, strip Latin accents and bracketed text, and keep only letters
 /// and digits. Non-Latin scripts pass through unchanged.
 pub fn norm(s: &str) -> String {

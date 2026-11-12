@@ -2,7 +2,7 @@
 
 use crate::{
     db::{Db, LibEntry},
-    norm::{artist_match, norm, sanitize},
+    norm::{OTHER_VERSIONS, artist_match, norm, sanitize},
 };
 use anyhow::{Result, anyhow};
 use lofty::{
@@ -155,7 +155,7 @@ pub fn find(db: &Db, cache: &Path, artist: &str, title: &str, duration: Option<f
         .lib_by_title(&tn)
         .ok()?
         .into_iter()
-        .filter(|(_, a, d)| {
+        .filter(|(_, a, d, _)| {
             artist_match(a, artist)
                 && match (duration, d) {
                     (Some(want), Some(have)) => (want - have).abs() <= 3.0,
@@ -168,13 +168,52 @@ pub fn find(db: &Db, cache: &Path, artist: &str, title: &str, duration: Option<f
     hits.into_iter().next()
 }
 
+/// The same song in your own library under another length (a video cut, a radio edit, a different
+/// master): still the better file to play than a fresh YouTube download. The length may differ by
+/// up to 30 s, and a copy whose version words differ ("live", "remix", "acoustic", ...) is refused,
+/// because matching ignores bracket text and would otherwise swap a live song for the studio one.
+pub fn find_loose(db: &Db, cache: &Path, artist: &str, title: &str, duration: Option<f64>) -> Option<String> {
+    let tn = norm(title);
+    if tn.is_empty() || artist.trim().is_empty() {
+        return None;
+    }
+    let wanted = title.to_lowercase();
+    let mut hits: Vec<(f64, String)> = db
+        .lib_by_title(&tn)
+        .ok()?
+        .into_iter()
+        .filter(|(p, a, _, _)| !Path::new(p).starts_with(cache) && artist_match(a, artist))
+        .filter(|(_, _, _, t)| {
+            let have = t.to_lowercase();
+            OTHER_VERSIONS.iter().all(|v| wanted.contains(v) == have.contains(v))
+        })
+        .filter_map(|(p, _, d, _)| match (duration, d) {
+            (Some(w), Some(h)) if (w - h).abs() > 30.0 => None,
+            (Some(w), Some(h)) => Some(((w - h).abs(), p)),
+            _ => Some((0.0, p)),
+        })
+        .collect();
+    hits.sort_by(|a, b| (!a.1.ends_with(".flac")).cmp(&!b.1.ends_with(".flac")).then(a.0.total_cmp(&b.0)));
+    hits.into_iter().next().map(|h| h.1)
+}
+
+/// The best file to play for a song, in order: your library at the same length, your library at
+/// another length, then the cache. Only when none exists is the song downloaded.
+pub fn best(db: &Db, cache: &Path, artist: &str, title: &str, duration: Option<f64>) -> Option<String> {
+    let exact = find(db, cache, artist, title, duration);
+    match &exact {
+        Some(p) if !Path::new(p).starts_with(cache) => exact,
+        _ => find_loose(db, cache, artist, title, duration).or(exact),
+    }
+}
+
 /// A song you already own: same title and artist outside the cache, whatever its length.
 pub fn same_song(db: &Db, cache: &Path, artist: &str, title: &str) -> Option<String> {
     let tn = norm(title);
     if tn.is_empty() || artist.trim().is_empty() {
         return None;
     }
-    db.lib_by_title(&tn).ok()?.into_iter().find(|(p, a, _)| !Path::new(p).starts_with(cache) && artist_match(a, artist)).map(|h| h.0)
+    db.lib_by_title(&tn).ok()?.into_iter().find(|(p, a, _, _)| !Path::new(p).starts_with(cache) && artist_match(a, artist)).map(|h| h.0)
 }
 
 /// Where a newly cached track goes: `<Artist>/<Album>/<Title>.ext`, or `Non-Album/<Artist>/<Title>.ext`.
@@ -328,6 +367,41 @@ mod tests {
         add("/cache/Gorillaz/c.flac", "Gorillaz", 223.0);
         assert_eq!(find(&db, cache, "Gorillaz", "Feel Good Inc", None).as_deref(), Some("/m/b.flac"));
         assert_eq!(find(&db, Path::new("/m"), "Gorillaz", "Feel Good Inc", None).as_deref(), Some("/cache/Gorillaz/c.flac"));
+    }
+
+    #[test]
+    fn your_own_copy_is_preferred_even_at_another_length_but_not_another_version() {
+        let db = Db::memory().unwrap();
+        let add = |path: &str, title: &str, d: f64| {
+            db.lib_upsert(&LibEntry {
+                path: path.into(),
+                mtime: 1,
+                artist: "OneRepublic".into(),
+                title: title.into(),
+                tn: norm(title),
+                duration: Some(d),
+            })
+            .unwrap()
+        };
+        let cache = Path::new("/cache");
+        add("/cache/OneRepublic/Counting Stars.m4a", "Counting Stars", 283.0);
+        add("/m/Native/01 Counting Stars.mp3", "Counting Stars", 257.0);
+        // The video cut is 26 s longer than your album copy: your copy is still played, not the download.
+        assert_eq!(
+            best(&db, cache, "OneRepublic", "Counting Stars (Official Video)", Some(283.0)).as_deref(),
+            Some("/m/Native/01 Counting Stars.mp3")
+        );
+        // The same length as your copy: no change.
+        assert_eq!(best(&db, cache, "OneRepublic", "Counting Stars", Some(257.0)).as_deref(), Some("/m/Native/01 Counting Stars.mp3"));
+        // A live version is not the studio one, so it falls back to what matches by length (the cache).
+        assert_eq!(
+            best(&db, cache, "OneRepublic", "Counting Stars (Live)", Some(283.0)).as_deref(),
+            Some("/cache/OneRepublic/Counting Stars.m4a")
+        );
+        // Too different in length to be the same recording: nothing matches, so it would be downloaded.
+        assert_eq!(best(&db, cache, "OneRepublic", "Counting Stars", Some(330.0)), None);
+        // Another artist's song with the same title is never swapped in.
+        assert_eq!(best(&db, cache, "Someone Else", "Counting Stars", Some(257.0)), None);
     }
 
     #[test]

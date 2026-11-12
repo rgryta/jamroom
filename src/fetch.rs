@@ -37,7 +37,7 @@ async fn make_ready(app: &App, job: &Job) -> Result<()> {
     let id = job.id;
     let mut it = job.item.clone();
 
-    if let Some(p) = library::find(&app.db, &app.cfg.cache, &it.artist, &it.title, it.duration) {
+    if let Some(p) = library::best(&app.db, &app.cfg.cache, &it.artist, &it.title, it.duration) {
         return app.db.set_ready(id, &p, false);
     }
 
@@ -56,7 +56,7 @@ async fn make_ready(app: &App, job: &Job) -> Result<()> {
             it.album = cand.album.clone();
             it.duration = cand.duration;
             app.db.set_details(id, &it.artist, &it.title, it.album.as_deref())?;
-            if let Some(p) = library::find(&app.db, &app.cfg.cache, &it.artist, &it.title, it.duration) {
+            if let Some(p) = library::best(&app.db, &app.cfg.cache, &it.artist, &it.title, it.duration) {
                 return app.db.set_ready(id, &p, false);
             }
         }
