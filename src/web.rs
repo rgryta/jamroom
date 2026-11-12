@@ -4,7 +4,7 @@ use crate::{app::App, db::Room};
 use anyhow::Result;
 use axum::{
     Json, Router,
-    extract::{ConnectInfo, Path, Request, State},
+    extract::{ConnectInfo, Path, Query, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
@@ -172,9 +172,24 @@ async fn advance(State(app): Shared, ConnectInfo(a): Client, h: HeaderMap, Path(
     state_json(&app, &room)
 }
 
-async fn next(State(app): Shared, ConnectInfo(a): Client, h: HeaderMap, Path(code): Path<String>) -> Result<Json<Value>, ApiError> {
+#[derive(Deserialize)]
+struct NextQuery {
+    /// The track the player just finished. Without it, whatever is playing is ended.
+    done: Option<i64>,
+}
+
+async fn next(
+    State(app): Shared,
+    ConnectInfo(a): Client,
+    h: HeaderMap,
+    Path(code): Path<String>,
+    Query(q): Query<NextQuery>,
+) -> Result<Json<Value>, ApiError> {
     let room = live_room(&app, &client_ip(&h, a), &code)?;
-    app.db.finish_current(&room.code)?;
+    match q.done {
+        Some(id) => app.db.finish_track(&room.code, id)?,
+        None => app.db.finish_current(&room.code)?,
+    }
     app.db.claim_next(&room.code)?;
     state_json(&app, &room)
 }
@@ -193,10 +208,26 @@ async fn remove(
 async fn media(State(app): Shared, ConnectInfo(a): Client, h: HeaderMap, Path((code, id)): Path<(String, i64)>, req: Request) -> Response {
     let Ok(room) = live_room(&app, &client_ip(&h, a), &code) else { return StatusCode::NOT_FOUND.into_response() };
     match app.db.track_file(&room.code, id) {
-        Ok(Some(file)) => match ServeFile::new(file).oneshot(req).await {
-            Ok(res) => res.into_response(),
-            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-        },
+        Ok(Some(file)) => {
+            let ext = std::path::Path::new(&file).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+            match ServeFile::new(file).oneshot(req).await {
+                Ok(mut res) => {
+                    // The guessed type for m4a is non-standard; some browsers refuse to play it.
+                    let mime = match ext.as_str() {
+                        "m4a" | "mp4" => Some("audio/mp4"),
+                        "flac" => Some("audio/flac"),
+                        "ogg" | "opus" => Some("audio/ogg"),
+                        "mp3" => Some("audio/mpeg"),
+                        _ => None,
+                    };
+                    if let Some(m) = mime {
+                        res.headers_mut().insert("content-type", HeaderValue::from_static(m));
+                    }
+                    res.into_response()
+                }
+                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            }
+        }
         _ => StatusCode::NOT_FOUND.into_response(),
     }
 }

@@ -224,6 +224,13 @@ impl Db {
         Ok(())
     }
 
+    /// Mark one specific track as played, only if it is the one playing. A late "ended" from the
+    /// player must not end the track that replaced it.
+    pub fn finish_track(&self, room: &str, id: i64) -> Result<()> {
+        self.c().execute("UPDATE tracks SET status = 'played' WHERE room = ?1 AND id = ?2 AND status = 'playing'", params![room, id])?;
+        Ok(())
+    }
+
     /// Remove a waiting track, or skip it if it is the one playing.
     pub fn remove(&self, room: &str, id: i64) -> Result<bool> {
         let c = self.c();
@@ -438,6 +445,24 @@ mod tests {
         assert!(!db.remove("r", b).unwrap());
         assert!(db.snapshot("r").unwrap().now.is_none());
         assert_eq!(db.open_count("r").unwrap(), 0);
+    }
+
+    #[test]
+    fn a_late_finish_only_ends_the_track_it_names() {
+        let db = Db::memory().unwrap();
+        let a = db.add_track("r", &track("one")).unwrap();
+        let b = db.add_track("r", &track("two")).unwrap();
+        db.next_job().unwrap();
+        db.next_job().unwrap();
+        db.set_ready(a, "/x/one.m4a", false).unwrap();
+        db.set_ready(b, "/x/two.m4a", false).unwrap();
+        db.claim_next("r").unwrap();
+        db.remove("r", a).unwrap(); // someone skipped it
+        db.claim_next("r").unwrap(); // two is now playing
+        db.finish_track("r", a).unwrap(); // the old player reports that one ended
+        assert_eq!(db.snapshot("r").unwrap().now.unwrap().id, b);
+        db.finish_track("r", b).unwrap();
+        assert!(db.snapshot("r").unwrap().now.is_none());
     }
 
     #[test]

@@ -70,9 +70,10 @@
     api('/state').then(function (s) { return !s.now && s.queue.length ? api('/advance', 'POST') : s; })
       .then(show).catch(function () {}).then(function () { busy = false; });
   }
-  function advance() { return api('/next', 'POST').then(show).catch(function () {}); }
-  a.addEventListener('ended', advance);
-  a.addEventListener('error', function () { if (cur !== null) setTimeout(advance, 1500); });
+  // Always say which track finished, so a late "ended" cannot end the track that replaced it.
+  function advance(id) { var done = id !== null ? '?done=' + id : ''; return api('/next' + done, 'POST').then(show).catch(function () {}); }
+  a.addEventListener('ended', function () { advance(cur); });
+  a.addEventListener('error', function () { if (cur !== null) { var failed = cur; setTimeout(function () { advance(failed); }, 1500); } });
 
   $('start').addEventListener('click', function () {
     started = true; $('start').hidden = true; $('deck').hidden = false;
