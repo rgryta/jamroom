@@ -96,6 +96,11 @@ docker run -p 8080:8080 -v ./data:/data -v ~/Music:/music \
 The first start creates a room named by `JAM_DEFAULT_ROOM` and logs its code. More rooms come
 from `/admin` (needs `JAM_ADMIN_TOKEN`). `deploy/compose.yaml` is the homelab stack.
 
+In that stack both services run as `3001:3000`, the user that owns the library files, and group 950
+(`group_add`) owns the library's top-level folder and may write there. The public service mounts the
+library read-only: it reuses songs you already have and never writes to it. `jamroom-soulseek` has no
+ports and is not on the public network; it is the only container that writes the library or talks to slskd.
+
 ## Settings
 
 | Variable | Default | Meaning |

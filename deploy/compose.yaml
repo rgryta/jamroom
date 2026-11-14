@@ -3,7 +3,6 @@ services:
     image: ghcr.io/rgryta/jamroom:0.2.0
     container_name: jamroom
     restart: unless-stopped
-    # 3001:3000 owns the library files; group 950 owns its top-level folder and may write there.
     user: "3001:3000"
     group_add:
       - "950"
@@ -22,16 +21,16 @@ services:
     tmpfs:
       - /tmp
     volumes:
-      - jam-data:/data
-      # Read-only: the public service reuses songs you already have and never writes to the library.
-      - /mnt/archive/media/Music:/music:ro
+      - jam_data:/data
+      - jam_music:/music:ro
     deploy:
       resources:
         limits:
           cpus: "2"
           memory: 512M
     networks:
-      - unsafe-network
+      unsafe-network:
+        ipv4_address: 172.20.1.4
     labels:
       - traefik.enable=true
       - autoheal=true
@@ -45,9 +44,6 @@ services:
       - traefik.http.middlewares.jamroom-per-ip.inFlightReq.amount=20
       - traefik.http.middlewares.jamroom-per-ip.inFlightReq.sourceCriterion.ipStrategy.depth=0
       - traefik.http.services.jamroom.loadbalancer.server.port=8080
-  # Looks for a lossless Soulseek copy of every cached YouTube song and files it in the library.
-  # Not on the public network and without ports; it is the only container that writes the library
-  # or talks to slskd.
   jamroom-soulseek:
     image: ghcr.io/rgryta/jamroom:0.2.0
     container_name: jamroom-soulseek
@@ -70,9 +66,9 @@ services:
     tmpfs:
       - /tmp
     volumes:
-      - jam-data:/data
-      - /mnt/archive/media/Music:/music
-      - /mnt/archive/apps/volumes/slskd/downloads/complete:/slsk:ro
+      - jam_data:/data
+      - jam_music:/music
+      - slsk_complete:/slsk:ro
     healthcheck:
       disable: true
     deploy:
@@ -81,17 +77,28 @@ services:
           cpus: "1"
           memory: 256M
     networks:
-      - homelab-vpn-network
+      homelab-vpn-network:
+        ipv4_address: 172.20.2.11
     labels:
       - wud.watch=true
       - wud.tag.include=^\d+\.\d+\.\d+$
       - wud.trigger.include=dockercompose.jamroom
 volumes:
-  jam-data:
+  jam_data:
     driver_opts:
       type: none
       o: bind
       device: /mnt/quick/apps/volumes/jamroom
+  jam_music:
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/archive/media/Music
+  slsk_complete:
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/archive/apps/volumes/slskd/downloads/complete
 networks:
   unsafe-network:
     name: unsafe-network
